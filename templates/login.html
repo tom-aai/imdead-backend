@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Login</title>
+	<style>
+		body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 40px; max-width: 640px; margin: 0 auto; }
+		.card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+		h1 { margin-top: 0; }
+		button { padding: 10px 14px; border-radius: 8px; border: 1px solid #e5e7eb; cursor: pointer; background: white; }
+		button:hover { background: #f8fafc; }
+		.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+		.notice { margin-top: 16px; color: #4b5563; font-size: 14px; }
+	</style>
+	<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+	<div class="card">
+		<h1>Login</h1>
+		<p>Choose a provider to sign in:</p>
+		<div class="grid">
+			<button id="btn-linkedin">Continue with LinkedIn</button>
+		</div>
+		<p class="notice">You will be redirected to authorize and then returned to this app.</p>
+	</div>
+
+	<script>
+		const SUPABASE_URL = "{{ supabase_url }}";
+		const SUPABASE_ANON_KEY = "{{ supabase_anon_key }}";
+		const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+		const redirectTo = `${window.location.origin}/callback`;
+
+		// This is temporary debugging code - Log initial setup
+		console.log('=== LOGIN PAGE DEBUG ===');
+		console.log('Supabase URL:', SUPABASE_URL);
+		console.log('Supabase Anon Key (first 10 chars):', SUPABASE_ANON_KEY.substring(0, 10) + '...');
+		console.log('Redirect URL:', redirectTo);
+		console.log('Current origin:', window.location.origin);
+		
+		// Check if Supabase client is properly initialized
+		console.log('Supabase client:', supabase);
+		console.log('Supabase auth:', supabase.auth);
+		
+		// Test if we can make a basic Supabase call
+		supabase.auth.getSession().then(({ data, error }) => {
+			console.log('Current session check:', { data, error });
+		}).catch(err => {
+			console.error('Supabase client error:', err);
+		});
+
+		async function signInWith(provider) {
+			// This is temporary debugging code - Log OAuth initiation
+			console.log(`=== OAUTH INITIATION DEBUG ===`);
+			console.log(`Provider: ${provider}`);
+			console.log(`Redirect URL: ${redirectTo}`);
+			console.log(`Supabase URL: ${SUPABASE_URL}`);
+			console.log(`Supabase Anon Key (first 10 chars): ${SUPABASE_ANON_KEY.substring(0, 10)}...`);
+			
+			try {
+				// This is temporary debugging code - Log before OAuth call
+				console.log('Calling supabase.auth.signInWithOAuth...');
+				
+				const result = await supabase.auth.signInWithOAuth({
+					provider,
+					options: { redirectTo }
+				});
+				
+				// This is temporary debugging code - Log OAuth result
+				console.log('OAuth result:', result);
+				console.log('OAuth result data:', result.data);
+				console.log('OAuth result error:', result.error);
+				
+				if (result.error) {
+					console.error('OAuth error:', result.error);
+					alert('Failed to initiate OAuth. Check console for details.');
+				} else {
+					console.log('OAuth initiated successfully');
+					console.log('OAuth URL:', result.data?.url);
+					console.log('OAuth provider:', result.data?.provider);
+					
+					// Check if we got a URL to redirect to
+					if (result.data?.url) {
+						console.log('Redirecting to OAuth provider URL:', result.data.url);
+						// The OAuth flow should redirect automatically, but let's log the URL
+					} else {
+						console.warn('No OAuth URL returned from Supabase');
+					}
+				}
+			} catch (err) {
+				// This is temporary debugging code - Log OAuth exception
+				console.error('OAuth exception:', err);
+				alert('Failed to initiate OAuth. Check console for details.');
+			}
+		}
+
+		document.getElementById('btn-linkedin').addEventListener('click', () => {
+			// This is temporary debugging code - Log button click
+			console.log('LinkedIn button clicked');
+			signInWith('linkedin_oidc');
+		});
+	</script>
+</body>
+</html>
