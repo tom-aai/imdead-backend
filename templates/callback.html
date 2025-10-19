@@ -32,132 +32,62 @@
 
 		(async () => {
 			try {
-				// This is temporary debugging code - Log current URL and parameters
-				console.log('=== OAUTH CALLBACK DEBUG ===');
-				console.log('Current URL:', window.location.href);
-				console.log('URL search params:', window.location.search);
-				console.log('URL hash:', window.location.hash);
-				
-				// Parse URL parameters and hash for debugging
-				const urlParams = new URLSearchParams(window.location.search);
-				const urlHash = window.location.hash.substring(1); // Remove the # symbol
-				const hashParams = new URLSearchParams(urlHash);
-				
-				const code = urlParams.get('code');
-				const state = urlParams.get('state');
-				const error = urlParams.get('error') || hashParams.get('error');
-				const errorDescription = urlParams.get('error_description') || hashParams.get('error_description');
-				
-				// Check for access token in hash (Supabase format)
-				const accessToken = hashParams.get('access_token');
-				const expiresAt = hashParams.get('expires_at');
-				const providerToken = hashParams.get('provider_token');
-				const refreshToken = hashParams.get('refresh_token');
-				
-				console.log('URL Parameters:');
-				console.log('  code:', code ? 'present' : 'missing');
-				console.log('  state:', state ? 'present' : 'missing');
-				console.log('  error:', error || 'none');
-				console.log('  error_description:', errorDescription || 'none');
-				
-				console.log('URL Hash Parameters:');
-				console.log('  access_token:', accessToken ? 'present' : 'missing');
-				console.log('  expires_at:', expiresAt || 'none');
-				console.log('  provider_token:', providerToken ? 'present' : 'missing');
-				console.log('  refresh_token:', refreshToken ? 'present' : 'missing');
-				
-				// Check if we have OAuth error parameters
-				if (error) {
-					console.error('OAuth error detected:', error, errorDescription);
-					throw new Error(`OAuth error: ${error} - ${errorDescription}`);
-				}
-				
-				// Check if we have the required access token (Supabase format)
-				if (!accessToken) {
-					console.error('No access token found in URL hash');
-					throw new Error('No access token found in callback URL. This usually means the OAuth provider configuration is incorrect.');
-				}
-				
-				console.log('Access token found, proceeding with authentication...');
-				
-				// This is temporary debugging code - Log Supabase client config
-				console.log('Supabase URL:', SUPABASE_URL);
-				console.log('Supabase Anon Key (first 10 chars):', SUPABASE_ANON_KEY.substring(0, 10) + '...');
-				
-				// Since we already have the access token from the URL hash, we can use it directly
-				console.log('Using access token from URL hash for authentication...');
-				
-				// Set the session in Supabase client using the access token
-				const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
-					access_token: accessToken,
-					refresh_token: refreshToken
-				});
-				
-				// This is temporary debugging code - Log session result
-				if (sessionError) {
-					console.error('Session error:', sessionError);
-					throw sessionError;
-				}
-				
-				console.log('Session data:', sessionData);
-				const session = sessionData.session;
-				if (!session) {
-					console.error('No session returned from setSession()');
-					throw new Error('No session returned');
-				}
-
-				// This is temporary debugging code - Log session details
-				console.log('Session details:', {
-					access_token: session.access_token ? 'present' : 'missing',
-					user_id: session.user?.id,
-					user_email: session.user?.email,
-					app_metadata: session.user?.app_metadata,
-					user_metadata: session.user?.user_metadata
-				});
-
-				const provider = session.user?.app_metadata?.provider || 'linkedin_oidc';
-				const accessTokenForServer = session.access_token;
-				
-				// This is temporary debugging code - Log before sending to server
-				console.log('Provider:', provider);
-				console.log('Access token (first 20 chars):', accessTokenForServer ? accessTokenForServer.substring(0, 20) + '...' : 'missing');
-
-				// This is temporary debugging code - Log request details
-				console.log('Sending request to /auth/complete with:', {
-					access_token: accessTokenForServer ? 'present' : 'missing',
-					provider: provider
-				});
-
-				const resp = await fetch('/auth/complete', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ access_token: accessTokenForServer, provider })
-				});
-				
-				// This is temporary debugging code - Log response details
-				console.log('Server response status:', resp.status);
-				console.log('Server response ok:', resp.ok);
-				
-				if (!resp.ok) {
-					const errorText = await resp.text();
-					console.error('Server error response:', errorText);
-					throw new Error('Server rejected sign-in: ' + errorText);
-				}
-
-				// This is temporary debugging code - Log success
-				console.log('Authentication successful, redirecting to dashboard');
-				window.location.assign('/dashboard');
-			} catch (err) {
-				// This is temporary debugging code - Enhanced error logging
-				console.error('=== OAUTH ERROR ===');
-				console.error('Error type:', err.constructor.name);
-				console.error('Error message:', err.message);
-				console.error('Error stack:', err.stack);
-				console.error('Full error object:', err);
-				
-				alert('Failed to sign in. Please try again. Check console for details.');
-				window.location.assign('/login');
+			// Parse URL parameters and hash
+			const urlParams = new URLSearchParams(window.location.search);
+			const urlHash = window.location.hash.substring(1); // Remove the # symbol
+			const hashParams = new URLSearchParams(urlHash);
+			
+			const error = urlParams.get('error') || hashParams.get('error');
+			const errorDescription = urlParams.get('error_description') || hashParams.get('error_description');
+			
+			// Check for access token in hash (Supabase format)
+			const accessToken = hashParams.get('access_token');
+			const refreshToken = hashParams.get('refresh_token');
+			
+			// Check if we have OAuth error parameters
+			if (error) {
+				throw new Error(`OAuth error: ${error} - ${errorDescription}`);
 			}
+			
+			// Check if we have the required access token (Supabase format)
+			if (!accessToken) {
+				throw new Error('No access token found in callback URL. This usually means the OAuth provider configuration is incorrect.');
+			}
+			
+			// Set the session in Supabase client using the access token
+			const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
+				access_token: accessToken,
+				refresh_token: refreshToken
+			});
+			
+			if (sessionError) {
+				throw sessionError;
+			}
+			
+			const session = sessionData.session;
+			if (!session) {
+				throw new Error('No session returned');
+			}
+
+			const provider = session.user?.app_metadata?.provider || 'linkedin_oidc';
+			const accessTokenForServer = session.access_token;
+
+			const resp = await fetch('/auth/complete', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ access_token: accessTokenForServer, provider })
+			});
+			
+			if (!resp.ok) {
+				const errorText = await resp.text();
+				throw new Error('Server rejected sign-in: ' + errorText);
+			}
+
+			window.location.assign('/dashboard');
+		} catch (err) {
+			alert('Failed to sign in. Please try again.');
+			window.location.assign('/login');
+		}
 		})();
 	</script>
 </body>

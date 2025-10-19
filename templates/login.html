@@ -32,72 +32,23 @@
 
 		const redirectTo = `${window.location.origin}/callback`;
 
-		// This is temporary debugging code - Log initial setup
-		console.log('=== LOGIN PAGE DEBUG ===');
-		console.log('Supabase URL:', SUPABASE_URL);
-		console.log('Supabase Anon Key (first 10 chars):', SUPABASE_ANON_KEY.substring(0, 10) + '...');
-		console.log('Redirect URL:', redirectTo);
-		console.log('Current origin:', window.location.origin);
-		
-		// Check if Supabase client is properly initialized
-		console.log('Supabase client:', supabase);
-		console.log('Supabase auth:', supabase.auth);
-		
-		// Test if we can make a basic Supabase call
-		supabase.auth.getSession().then(({ data, error }) => {
-			console.log('Current session check:', { data, error });
-		}).catch(err => {
-			console.error('Supabase client error:', err);
-		});
 
 		async function signInWith(provider) {
-			// This is temporary debugging code - Log OAuth initiation
-			console.log(`=== OAUTH INITIATION DEBUG ===`);
-			console.log(`Provider: ${provider}`);
-			console.log(`Redirect URL: ${redirectTo}`);
-			console.log(`Supabase URL: ${SUPABASE_URL}`);
-			console.log(`Supabase Anon Key (first 10 chars): ${SUPABASE_ANON_KEY.substring(0, 10)}...`);
-			
 			try {
-				// This is temporary debugging code - Log before OAuth call
-				console.log('Calling supabase.auth.signInWithOAuth...');
-				
 				const result = await supabase.auth.signInWithOAuth({
 					provider,
 					options: { redirectTo }
 				});
 				
-				// This is temporary debugging code - Log OAuth result
-				console.log('OAuth result:', result);
-				console.log('OAuth result data:', result.data);
-				console.log('OAuth result error:', result.error);
-				
 				if (result.error) {
-					console.error('OAuth error:', result.error);
-					alert('Failed to initiate OAuth. Check console for details.');
-				} else {
-					console.log('OAuth initiated successfully');
-					console.log('OAuth URL:', result.data?.url);
-					console.log('OAuth provider:', result.data?.provider);
-					
-					// Check if we got a URL to redirect to
-					if (result.data?.url) {
-						console.log('Redirecting to OAuth provider URL:', result.data.url);
-						// The OAuth flow should redirect automatically, but let's log the URL
-					} else {
-						console.warn('No OAuth URL returned from Supabase');
-					}
+					alert('Failed to initiate OAuth. Please try again.');
 				}
 			} catch (err) {
-				// This is temporary debugging code - Log OAuth exception
-				console.error('OAuth exception:', err);
-				alert('Failed to initiate OAuth. Check console for details.');
+				alert('Failed to initiate OAuth. Please try again.');
 			}
 		}
 
 		document.getElementById('btn-linkedin').addEventListener('click', () => {
-			// This is temporary debugging code - Log button click
-			console.log('LinkedIn button clicked');
 			signInWith('linkedin_oidc');
 		});
 	</script>
