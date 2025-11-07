@@ -5,6 +5,8 @@ from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+from services.transcript_processing import TranscriptProcessor
+
 # Load environment variables: prefer .env.local, fallback to default .env if present
 _loaded = load_dotenv(".env.local")
 if not _loaded:
@@ -26,6 +28,9 @@ if SUPABASE_URL and SUPABASE_SERVICE_KEY:
 	logger.info("✅ Supabase client initialized")
 else:
 	logger.warning("⚠️ Supabase credentials not found")
+
+# Initialize services
+transcript_processor = TranscriptProcessor(supabase)
 
 
 @app.route("/")
@@ -51,86 +56,22 @@ def process_transcript():
 		data = request.get_json()
 		session_id = data.get("session_id")
 		
-		if not session_id:
-			logger.error("❌ No session_id provided in request")
-			return jsonify({"error": "session_id is required"}), 400
-		
-		if not supabase:
-			logger.error("❌ Supabase client not initialized")
-			return jsonify({"error": "Supabase not configured"}), 500
-		
-		logger.info("=" * 60)
-		logger.info(f"📞 PROCESSING TRANSCRIPT FOR SESSION: {session_id}")
-		logger.info("=" * 60)
-		
-		# Fetch the call data from Supabase
-		response = supabase.table("calls").select("*").eq("session_id", session_id).execute()
-		
-		if not response.data or len(response.data) == 0:
-			logger.error(f"❌ No call found for session_id: {session_id}")
-			return jsonify({"error": "Call not found"}), 404
-		
-		call_data = response.data[0]
-		
-		# Print call metadata
-		logger.info(f"User ID: {call_data.get('user_id', 'N/A')}")
-		logger.info(f"User Name: {call_data.get('user_firstname', '')} {call_data.get('user_lastname', '')}")
-		logger.info(f"Picture ID: {call_data.get('picture_id', 'N/A')}")
-		logger.info(f"Timestamp: {call_data.get('timestamp', 'N/A')}")
-		logger.info(f"Job ID: {call_data.get('job_id', 'N/A')}")
-		
-		# Print conversation history
-		conversation = call_data.get('conversation', {})
-		items = conversation.get('items', [])
-		logger.info(f"\n📝 CONVERSATION TRANSCRIPT ({len(items)} items):")
-		logger.info("-" * 60)
-		
-		for i, item in enumerate(items, 1):
-			role = item.get('role', 'unknown')
-			content = item.get('content', '')
-			
-			# Handle different content formats
-			if isinstance(content, list):
-				# Content is a list of messages
-				for msg in content:
-					if isinstance(msg, dict):
-						text = msg.get('text', msg.get('transcript', ''))
-						if text:
-							logger.info(f"{i}. [{role.upper()}]: {text}")
-					else:
-						logger.info(f"{i}. [{role.upper()}]: {msg}")
-			elif isinstance(content, str):
-				logger.info(f"{i}. [{role.upper()}]: {content}")
-			else:
-				logger.info(f"{i}. [{role.upper()}]: {content}")
-		
-		logger.info("-" * 60)
-		
-		# Print usage statistics
-		usage = call_data.get('usage', {})
-		if usage:
-			logger.info(f"\n📊 USAGE STATISTICS:")
-			logger.info(f"  LLM Prompt Tokens: {usage.get('llm_prompt_tokens', 0)}")
-			logger.info(f"  LLM Completion Tokens: {usage.get('llm_completion_tokens', 0)}")
-			logger.info(f"  TTS Characters: {usage.get('tts_characters_count', 0)}")
-			logger.info(f"  TTS Audio Duration: {usage.get('tts_audio_duration', 0):.1f}s")
-			logger.info(f"  STT Audio Duration: {usage.get('stt_audio_duration', 0):.1f}s")
-		
-		logger.info("=" * 60)
-		logger.info("✅ TRANSCRIPT PROCESSING COMPLETE (stub)")
-		logger.info("=" * 60)
-		
-		# TODO: Add LLM processing here
-		# analysis = process_with_llm(conversation)
-		# supabase.table("call_analysis").insert({"session_id": session_id, "analysis": analysis}).execute()
+		# Process the transcript using the service
+		result = transcript_processor.process_transcript(session_id)
 		
 		return jsonify({
-			"status": "success",
-			"message": "Transcript processed successfully",
-			"session_id": session_id
+			"status": result["status"],
+			"message": result["message"],
+			"session_id": result["session_id"]
 		}), 200
 		
+	except ValueError as e:
+		# Handle validation errors (missing session_id, call not found, etc.)
+		logger.error(f"❌ Validation error: {e}")
+		return jsonify({"error": str(e)}), 400 if "required" in str(e) else 404
+		
 	except Exception as e:
+		# Handle unexpected errors
 		logger.error(f"❌ Error processing transcript: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
