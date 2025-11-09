@@ -4,11 +4,16 @@ Use this to test different prompts and processing approaches.
 """
 
 import os
+import sys
 import json
 import logging
 from dotenv import load_dotenv
 from supabase import create_client
 from anthropic import Anthropic
+
+# Add parent directory to path to import utils
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils import load_prompt
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -103,26 +108,23 @@ def process_with_claude(user_statements: list[str]) -> str:
         user_statements: List of user statement strings
         
     Returns:
-        str: Claude's response
+        str: Claude's response (JSON-formatted analysis)
     """
     # Combine all user statements
     all_statements = "\n".join([f"- {stmt}" for stmt in user_statements])
     
-    # ========================================
-    # PROMPT - Modify this to iterate on your processing
-    # ========================================
-    prompt = f"""Here are statements from a user during a conversation:
-
-{all_statements}
-
-Please summarize all of the user's statements into one concise sentence that captures the main points they expressed."""
+    # Load prompt template from file
+    prompt_template = load_prompt('transcript_analysis_prompt.txt')
+    
+    # Replace placeholder with actual user statements
+    prompt = prompt_template.replace('{user_statements}', all_statements)
     
     logger.info(f"Processing {len(user_statements)} user statements with Claude")
     
     # Call Claude API
     message = anthropic.messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=1024,
+        max_tokens=4096,  # Increased for structured JSON response
         messages=[
             {
                 "role": "user",
@@ -158,7 +160,11 @@ def main():
         result = process_with_claude(user_statements)
         
         # Output result
-        print("\n" + result + "\n")
+        print("\n" + "="*60)
+        print("TRANSCRIPT ANALYSIS RESULT")
+        print("="*60)
+        print(result)
+        print("="*60 + "\n")
         
     except ValueError as e:
         logger.error(f"Validation error: {e}")

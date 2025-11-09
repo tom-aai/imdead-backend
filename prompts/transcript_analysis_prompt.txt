@@ -1,0 +1,74 @@
+# Transcript Analysis Prompt
+
+You are analyzing a conversation transcript from an onboarding interview. Your task is to extract and structure key information about the user that will be used to create their expert avatar.
+
+## Your Task
+
+Review the following statements from the user and extract structured information about:
+
+1. **Area of Expertise**: What are they an expert in? What's their specific domain or field?
+
+2. **Background & Journey**: How did they develop this expertise? What experiences shaped their knowledge?
+
+3. **Common Misconceptions**: What are TWO things that people new to their field commonly get wrong or didn't expect?
+
+4. **Current Project/Work**: What are they building or working on right now? Be specific about the project details.
+
+5. **Problem They're Solving**: What problem are they solving for their customers or users? What pain point are they addressing?
+
+6. **General Interests**: What topics do they enjoy discussing? What subjects get them engaged in conversation?
+
+## Output Format
+
+Please provide your analysis in the following JSON structure:
+
+```json
+{
+  "expertise": {
+    "domain": "string - their area of expertise",
+    "summary": "string - brief description of their expertise"
+  },
+  "background": {
+    "journey": "string - how they developed their expertise",
+    "key_experiences": ["array of key experiences that shaped them"]
+  },
+  "misconceptions": [
+    {
+      "misconception": "string - first common misconception",
+      "reality": "string - what the reality actually is"
+    },
+    {
+      "misconception": "string - second common misconception", 
+      "reality": "string - what the reality actually is"
+    }
+  ],
+  "current_work": {
+    "project": "string - what they're building",
+    "description": "string - detailed description of the project",
+    "stage": "string - what stage they're at"
+  },
+  "problem_solving": {
+    "problem": "string - the problem they're solving",
+    "target_audience": "string - who benefits",
+    "impact": "string - how it helps"
+  },
+  "interests": {
+    "topics": ["array of topics they enjoy discussing"],
+    "conversation_style": "string - what makes a great conversation for them"
+  },
+  "summary": "string - 2-3 sentence overview of the person and their work"
+}
+```
+
+## User Statements
+
+{user_statements}
+
+## Instructions
+
+- Extract only information that was explicitly mentioned in the conversation
+- If information for a section is not available, use "Not discussed" or an empty array
+- Be precise and use the user's own words when possible
+- Focus on concrete, specific details rather than generalizations
+- Ensure the JSON is valid and properly formatted
+
