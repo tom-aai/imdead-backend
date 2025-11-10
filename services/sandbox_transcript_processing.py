@@ -121,7 +121,7 @@ User Last Name: {call_data.get('user_lastname', 'N/A')}
 Created At: {call_data.get('created_at', 'N/A')}"""
 
 
-def process_with_claude(metadata: str, transcript: str) -> str:
+def process_with_claude(metadata: str, transcript: str) -> dict:
     """
     Process transcript with Claude using the transcript analysis prompt.
     
@@ -130,7 +130,7 @@ def process_with_claude(metadata: str, transcript: str) -> str:
         transcript: Formatted transcript string
         
     Returns:
-        str: Claude's response (JSON-formatted analysis)
+        dict: Parsed JSON analysis from Claude
     """
     # Load prompt template from file
     prompt_template = load_prompt('transcript_analysis_prompt.txt')
@@ -152,7 +152,64 @@ def process_with_claude(metadata: str, transcript: str) -> str:
         ]
     )
     
-    return message.content[0].text
+    response_text = message.content[0].text
+    
+    # Parse JSON from response (handle potential markdown code blocks)
+    if "```json" in response_text:
+        # Extract JSON from markdown code block
+        json_start = response_text.find("```json") + 7
+        json_end = response_text.find("```", json_start)
+        json_text = response_text[json_start:json_end].strip()
+    elif "```" in response_text:
+        # Extract from generic code block
+        json_start = response_text.find("```") + 3
+        json_end = response_text.find("```", json_start)
+        json_text = response_text[json_start:json_end].strip()
+    else:
+        json_text = response_text.strip()
+    
+    return json.loads(json_text)
+
+
+def upload_to_supabase(analysis_data: dict) -> dict:
+    """
+    Upload analysis data to interview_call_analysis table.
+    Excludes myers_briggs_code, personality, and expertise_description.
+    
+    Args:
+        analysis_data: Dict containing the full analysis from Claude
+        
+    Returns:
+        dict: The inserted record from Supabase
+    """
+    # Prepare data for upload (exclude unwanted fields)
+    upload_data = {
+        "session_id": analysis_data.get("session_id"),
+        "user_id": analysis_data.get("user_id"),
+        "user_firstname": analysis_data.get("user_firstname"),
+        "user_lastname": analysis_data.get("user_lastname"),
+        "created_at": analysis_data.get("created_at"),
+        "main_topic": analysis_data.get("main_topic"),
+        "conversation_narrative": analysis_data.get("conversation_narrative"),
+        "hot_take_1": analysis_data.get("hot_take_1"),
+        "hot_take_2": analysis_data.get("hot_take_2"),
+        "social_post_draft": analysis_data.get("social_post_draft"),
+        # Nullable fields (will be filled later)
+        "avatar_chat_prompt": None,
+        "hot_take_video_1": None,
+        "hot_take_video_2": None
+    }
+    
+    logger.info(f"Uploading analysis to interview_call_analysis table...")
+    
+    # Insert into Supabase
+    response = supabase.table("interview_call_analysis").upsert(upload_data).execute()
+    
+    if response.data:
+        logger.info(f"✅ Successfully uploaded analysis for session: {upload_data['session_id']}")
+        return response.data[0]
+    else:
+        raise Exception("Failed to upload analysis to Supabase")
 
 
 def main():
@@ -179,13 +236,24 @@ def main():
         logger.info(f"Formatted transcript with {len(transcript.splitlines())} lines")
         
         # Process with Claude
-        result = process_with_claude(metadata, transcript)
+        analysis = process_with_claude(metadata, transcript)
         
         # Output result
         print("\n" + "="*60)
         print("TRANSCRIPT ANALYSIS RESULT")
         print("="*60)
-        print(result)
+        print(json.dumps(analysis, indent=2))
+        print("="*60 + "\n")
+        
+        # Upload to Supabase
+        uploaded_record = upload_to_supabase(analysis)
+        
+        print("\n" + "="*60)
+        print("UPLOAD CONFIRMATION")
+        print("="*60)
+        print(f"✅ Analysis uploaded successfully!")
+        print(f"Record ID: {uploaded_record.get('id')}")
+        print(f"Session ID: {uploaded_record.get('session_id')}")
         print("="*60 + "\n")
         
     except ValueError as e:

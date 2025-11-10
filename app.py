@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Initialize Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_SERVICE_KEY:
@@ -29,8 +30,11 @@ if SUPABASE_URL and SUPABASE_SERVICE_KEY:
 else:
 	logger.warning("⚠️ Supabase credentials not found")
 
+if not ANTHROPIC_API_KEY:
+	logger.warning("⚠️ Anthropic API key not found")
+
 # Initialize services
-transcript_processor = TranscriptProcessor(supabase)
+transcript_processor = TranscriptProcessor(supabase, ANTHROPIC_API_KEY)
 
 
 @app.route("/")

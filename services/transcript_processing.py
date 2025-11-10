@@ -3,7 +3,15 @@ Transcript processing service.
 Handles post-call transcript analysis and processing.
 """
 
+import json
 import logging
+import os
+from anthropic import Anthropic
+import sys
+
+# Add parent directory to path to import utils
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -11,14 +19,16 @@ logger = logging.getLogger(__name__)
 class TranscriptProcessor:
 	"""Service for processing call transcripts."""
 	
-	def __init__(self, supabase_client):
+	def __init__(self, supabase_client, anthropic_api_key: str = None):
 		"""
 		Initialize the transcript processor.
 		
 		Args:
 			supabase_client: Initialized Supabase client
+			anthropic_api_key: Anthropic API key (optional, will use env var if not provided)
 		"""
 		self.supabase = supabase_client
+		self.anthropic = Anthropic(api_key=anthropic_api_key or os.getenv("ANTHROPIC_API_KEY"))
 	
 	def process_transcript(self, session_id: str) -> dict:
 		"""
@@ -63,22 +73,36 @@ class TranscriptProcessor:
 		# Log usage statistics
 		self._log_usage_stats(call_data.get('usage', {}))
 		
-		logger.info("=" * 60)
-		logger.info("✅ TRANSCRIPT PROCESSING COMPLETE (stub)")
-		logger.info("=" * 60)
+		# Format metadata and transcript for Claude processing
+		metadata = self._format_metadata(call_data)
+		transcript = self._format_transcript(conversation)
 		
-		# TODO: Add LLM processing here
-		# analysis = self._process_with_llm(conversation)
-		# self.supabase.table("call_analysis").insert({
-		#     "session_id": session_id,
-		#     "analysis": analysis
-		# }).execute()
+		if not transcript:
+			logger.warning("No conversation content found in transcript")
+			return {
+				"status": "error",
+				"message": "No conversation content to process",
+				"session_id": session_id
+			}
+		
+		# Process with Claude
+		logger.info("Processing transcript with Claude...")
+		analysis = self._process_with_llm(metadata, transcript)
+		
+		# Upload to interview_call_analysis table
+		uploaded_record = self._upload_to_supabase(analysis)
+		
+		logger.info("=" * 60)
+		logger.info("✅ TRANSCRIPT PROCESSING COMPLETE")
+		logger.info(f"Analysis uploaded with ID: {uploaded_record.get('id')}")
+		logger.info("=" * 60)
 		
 		return {
 			"status": "success",
-			"message": "Transcript processed successfully",
+			"message": "Transcript processed and uploaded successfully",
 			"session_id": session_id,
-			"call_data": call_data
+			"analysis_id": uploaded_record.get('id'),
+			"analysis": analysis
 		}
 	
 	def _log_call_metadata(self, call_data: dict):
@@ -126,21 +150,144 @@ class TranscriptProcessor:
 			logger.info(f"  TTS Audio Duration: {usage.get('tts_audio_duration', 0):.1f}s")
 			logger.info(f"  STT Audio Duration: {usage.get('stt_audio_duration', 0):.1f}s")
 	
-	def _process_with_llm(self, conversation: dict) -> dict:
+	def _format_metadata(self, call_data: dict) -> str:
 		"""
-		Process conversation with LLM (to be implemented).
+		Format call metadata for the prompt.
 		
 		Args:
-			conversation: The conversation data
+			call_data: The call data from the database
 			
 		Returns:
-			dict: Structured analysis from LLM
+			str: Formatted metadata string
 		"""
-		# TODO: Implement LLM processing
-		# Example:
-		# - Extract key points
-		# - Sentiment analysis
-		# - Action items
-		# - Summary
-		pass
+		return f"""Session ID: {call_data.get('session_id', 'N/A')}
+User ID: {call_data.get('user_id', 'N/A')}
+User First Name: {call_data.get('user_firstname', 'N/A')}
+User Last Name: {call_data.get('user_lastname', 'N/A')}
+Created At: {call_data.get('created_at', 'N/A')}"""
+	
+	def _format_transcript(self, conversation: dict) -> str:
+		"""
+		Format the conversation into a transcript with both user and assistant messages.
+		
+		Args:
+			conversation: The conversation JSONB data
+			
+		Returns:
+			str: Formatted transcript string
+		"""
+		transcript_lines = []
+		items = conversation.get('items', [])
+		
+		for item in items:
+			role = item.get('role', '').lower()
+			content = item.get('content', '')
+			
+			# Handle different content formats
+			messages = []
+			if isinstance(content, list):
+				for msg in content:
+					if isinstance(msg, dict):
+						text = msg.get('text', msg.get('transcript', ''))
+						if text:
+							messages.append(text)
+					elif isinstance(msg, str):
+						messages.append(msg)
+			elif isinstance(content, str) and content:
+				messages.append(content)
+			
+			# Format each message with the role
+			for msg in messages:
+				transcript_lines.append(f"[{role.upper()}]: {msg}")
+		
+		return "\n".join(transcript_lines)
+	
+	def _process_with_llm(self, metadata: str, transcript: str) -> dict:
+		"""
+		Process transcript with Claude using the transcript analysis prompt.
+		
+		Args:
+			metadata: Formatted metadata string
+			transcript: Formatted transcript string
+			
+		Returns:
+			dict: Parsed JSON analysis from Claude
+		"""
+		# Load prompt template from file
+		prompt_template = load_prompt('transcript_analysis_prompt.txt')
+		
+		# Replace placeholders with actual data
+		prompt = prompt_template.replace('{metadata}', metadata).replace('{transcript}', transcript)
+		
+		logger.info(f"Calling Claude API (transcript length: {len(transcript)} chars)")
+		
+		# Call Claude API
+		message = self.anthropic.messages.create(
+			model="claude-sonnet-4-20250514",
+			max_tokens=4096,
+			messages=[
+				{
+					"role": "user",
+					"content": prompt
+				}
+			]
+		)
+		
+		response_text = message.content[0].text
+		
+		# Parse JSON from response (handle potential markdown code blocks)
+		if "```json" in response_text:
+			# Extract JSON from markdown code block
+			json_start = response_text.find("```json") + 7
+			json_end = response_text.find("```", json_start)
+			json_text = response_text[json_start:json_end].strip()
+		elif "```" in response_text:
+			# Extract from generic code block
+			json_start = response_text.find("```") + 3
+			json_end = response_text.find("```", json_start)
+			json_text = response_text[json_start:json_end].strip()
+		else:
+			json_text = response_text.strip()
+		
+		return json.loads(json_text)
+	
+	def _upload_to_supabase(self, analysis_data: dict) -> dict:
+		"""
+		Upload analysis data to interview_call_analysis table.
+		Excludes myers_briggs_code, personality, and expertise_description.
+		
+		Args:
+			analysis_data: Dict containing the full analysis from Claude
+			
+		Returns:
+			dict: The inserted record from Supabase
+		"""
+		# Prepare data for upload (exclude unwanted fields)
+		upload_data = {
+			"session_id": analysis_data.get("session_id"),
+			"user_id": analysis_data.get("user_id"),
+			"user_firstname": analysis_data.get("user_firstname"),
+			"user_lastname": analysis_data.get("user_lastname"),
+			"created_at": analysis_data.get("created_at"),
+			"main_topic": analysis_data.get("main_topic"),
+			"conversation_narrative": analysis_data.get("conversation_narrative"),
+			"hot_take_1": analysis_data.get("hot_take_1"),
+			"hot_take_2": analysis_data.get("hot_take_2"),
+			"social_post_draft": analysis_data.get("social_post_draft"),
+			# Nullable fields (will be filled later)
+			"avatar_chat_prompt": None,
+			"hot_take_video_1": None,
+			"hot_take_video_2": None
+		}
+		
+		logger.info(f"Uploading analysis to interview_call_analysis table...")
+		
+		# Insert into Supabase (upsert to handle re-processing)
+		response = self.supabase.table("interview_call_analysis").upsert(upload_data).execute()
+		
+		if response.data:
+			logger.info(f"✅ Successfully uploaded analysis for session: {upload_data['session_id']}")
+			return response.data[0]
+		else:
+			raise Exception("Failed to upload analysis to Supabase")
 

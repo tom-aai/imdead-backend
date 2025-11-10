@@ -47,7 +47,7 @@ Review the conversation transcript and metadata provided below, and extract the 
 
 ### Supplementary Content (Ancillary Purpose: Promotion & Marketing)
 
-6. **Main Topic**: Identify the primary topic or subject that the user discussed in the conversation. This should be a concise phrase or sentence capturing the core theme. This will be used for categorization and discovery.
+6. **Main Topic**: Identify the primary topic or subject that the user discussed in the conversation. This should be a concise phrase capturing the core theme. This will be used for categorization and discovery. It should be five words or less.
 
 7. **Hot Takes**: Extract TWO compelling statements from the transcript that represent the user's strongest or most interesting viewpoints. These "hot takes" should:
    - Use the same voice, tone, and word choice as the user
