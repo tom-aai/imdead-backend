@@ -59,7 +59,7 @@ def fetch_call_data(session_id: str) -> dict:
         dict: Call data including conversation
     """
     logger.info(f"Fetching call data for session: {session_id}")
-    response = supabase.table("calls").select("*").eq("session_id", session_id).execute()
+    response = supabase.table("interview_calls").select("*").eq("session_id", session_id).execute()
     
     if not response.data or len(response.data) == 0:
         raise ValueError(f"No call found for session_id: {session_id}")
@@ -67,59 +67,78 @@ def fetch_call_data(session_id: str) -> dict:
     return response.data[0]
 
 
-def extract_user_statements(conversation: dict) -> list[str]:
+def format_transcript(conversation: dict) -> str:
     """
-    Extract all user statements from the conversation.
+    Format the conversation into a transcript with both user and assistant messages.
     
     Args:
         conversation: The conversation JSONB data
         
     Returns:
-        list: List of user statement strings
+        str: Formatted transcript string
     """
-    user_statements = []
+    transcript_lines = []
     items = conversation.get('items', [])
     
     for item in items:
         role = item.get('role', '').lower()
-        if role == 'user':
-            content = item.get('content', '')
-            
-            # Handle different content formats
-            if isinstance(content, list):
-                for msg in content:
-                    if isinstance(msg, dict):
-                        text = msg.get('text', msg.get('transcript', ''))
-                        if text:
-                            user_statements.append(text)
-                    elif isinstance(msg, str):
-                        user_statements.append(msg)
-            elif isinstance(content, str) and content:
-                user_statements.append(content)
+        content = item.get('content', '')
+        
+        # Handle different content formats
+        messages = []
+        if isinstance(content, list):
+            for msg in content:
+                if isinstance(msg, dict):
+                    text = msg.get('text', msg.get('transcript', ''))
+                    if text:
+                        messages.append(text)
+                elif isinstance(msg, str):
+                    messages.append(msg)
+        elif isinstance(content, str) and content:
+            messages.append(content)
+        
+        # Format each message with the role
+        for msg in messages:
+            transcript_lines.append(f"[{role.upper()}]: {msg}")
     
-    return user_statements
+    return "\n".join(transcript_lines)
 
 
-def process_with_claude(user_statements: list[str]) -> str:
+def format_metadata(call_data: dict) -> str:
     """
-    Process user statements with Claude.
+    Format call metadata for the prompt.
     
     Args:
-        user_statements: List of user statement strings
+        call_data: The call data from the database
+        
+    Returns:
+        str: Formatted metadata string
+    """
+    return f"""Session ID: {call_data.get('session_id', 'N/A')}
+User ID: {call_data.get('user_id', 'N/A')}
+User First Name: {call_data.get('user_firstname', 'N/A')}
+User Last Name: {call_data.get('user_lastname', 'N/A')}
+Created At: {call_data.get('created_at', 'N/A')}"""
+
+
+def process_with_claude(metadata: str, transcript: str) -> str:
+    """
+    Process transcript with Claude using the transcript analysis prompt.
+    
+    Args:
+        metadata: Formatted metadata string
+        transcript: Formatted transcript string
         
     Returns:
         str: Claude's response (JSON-formatted analysis)
     """
-    # Combine all user statements
-    all_statements = "\n".join([f"- {stmt}" for stmt in user_statements])
-    
     # Load prompt template from file
     prompt_template = load_prompt('transcript_analysis_prompt.txt')
     
-    # Replace placeholder with actual user statements
-    prompt = prompt_template.replace('{user_statements}', all_statements)
+    # Replace placeholders with actual data
+    prompt = prompt_template.replace('{metadata}', metadata).replace('{transcript}', transcript)
     
-    logger.info(f"Processing {len(user_statements)} user statements with Claude")
+    logger.info(f"Processing transcript with Claude (transcript length: {len(transcript)} chars)")
     
     # Call Claude API
     message = anthropic.messages.create(
@@ -149,15 +168,18 @@ def main():
             logger.error("No conversation data found")
             return
         
-        # Extract user statements
-        user_statements = extract_user_statements(conversation)
+        # Format metadata and transcript
+        metadata = format_metadata(call_data)
+        transcript = format_transcript(conversation)
         
-        if not user_statements:
-            logger.warning("No user statements found in conversation")
+        if not transcript:
+            logger.warning("No conversation content found in transcript")
             return
         
+        logger.info(f"Formatted transcript with {len(transcript.splitlines())} lines")
+        
         # Process with Claude
-        result = process_with_claude(user_statements)
+        result = process_with_claude(metadata, transcript)
         
         # Output result
         print("\n" + "="*60)

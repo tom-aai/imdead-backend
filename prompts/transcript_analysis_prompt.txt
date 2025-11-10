@@ -1,74 +1,119 @@
 # Transcript Analysis Prompt
 
-You are analyzing a conversation transcript from an onboarding interview. Your task is to extract and structure key information about the user that will be used to create their expert avatar.
+You are analyzing a conversation transcript to create an expert avatar agent. Your primary task is to extract and structure information that will be used to build an AI agent that emulates the user, allowing others to have conversations with their avatar about their expertise.
+
+## Primary Goal: Create Avatar Agent Content
+
+The most important output is the **Conversation Narrative**, which will serve as the foundational knowledge base for an avatar agent. This agent will represent the user in conversations with other people, answering questions and discussing topics within the user's area of expertise. The narrative must be comprehensive and capture the user's voice, perspectives, and knowledge in detail.
 
 ## Your Task
 
-Review the following statements from the user and extract structured information about:
+Review the conversation transcript and metadata provided below, and extract the following information:
 
-1. **Area of Expertise**: What are they an expert in? What's their specific domain or field?
+### Core Content (Primary Purpose: Avatar Agent Creation)
 
-2. **Background & Journey**: How did they develop this expertise? What experiences shaped their knowledge?
+1. **Metadata**: Extract session_id, user_id, user_firstname, user_lastname, and created_at from the provided metadata.
 
-3. **Common Misconceptions**: What are TWO things that people new to their field commonly get wrong or didn't expect?
+2. **Conversation Narrative**: This is the PRIMARY output that will be used to create the avatar agent. Create a detailed, thorough, and comprehensive summary of the entire conversation that captures:
+   - The user's expertise, knowledge, and perspectives
+   - Their communication style, tone, and personality
+   - Specific examples, stories, and experiences they shared
+   - Their viewpoints, opinions, and reasoning
+   - Direct quotes from the user that exemplify their voice and thinking
+   
+   Focus on thoroughness and depth rather than brevity - this content will teach the avatar agent how to think and speak like the user. Always refer to the user by their actual name (found in the metadata) rather than as "user" or "the participant."
 
-4. **Current Project/Work**: What are they building or working on right now? Be specific about the project details.
+### Avatar Personality & Character (Purpose: Avatar Behavior & Authenticity)
 
-5. **Problem They're Solving**: What problem are they solving for their customers or users? What pain point are they addressing?
+3. **Myers-Briggs Code**: Assess the user's personality based on the conversation and assign a Myers-Briggs personality type code (e.g., INTJ, ENFP, etc.). Analyze their communication style, thinking patterns, energy orientation, and decision-making approach to determine the most fitting type. This will guide the avatar's personality and interaction style.
 
-6. **General Interests**: What topics do they enjoy discussing? What subjects get them engaged in conversation?
+4. **Personality Description**: Provide a detailed description of the user's personality as observed in the conversation, written in natural, everyday language as if you're describing them to another person. DO NOT use Myers-Briggs terminology or jargon. Include:
+   - Communication style and mannerisms
+   - Energy and enthusiasm levels
+   - Approach to explaining concepts
+   - Social interaction patterns
+   - Thinking and problem-solving style
+   - Any distinctive personality traits or quirks
+   
+   **CRITICAL**: NEVER describe the user as someone who "pauses to think," "takes time to reflect," or any similar phrasing that suggests deliberate slowness. Latency is critical in voice AI, and we do not want to encourage the avatar to be slower than necessary. Focus on the content and style of their communication, not their pacing.
+   
+   This detailed personality profile will be used to ensure the avatar behaves authentically like the user.
+
+5. **Expertise Description**: Write a succinct description of the user's area of expertise and background. This should be 2-4 sentences that capture:
+   - Their primary domain of expertise
+   - Key professional background or credentials
+   - Current work or focus area
+   - What makes them uniquely qualified in their field
+
+### Supplementary Content (Ancillary Purpose: Promotion & Marketing)
+
+6. **Main Topic**: Identify the primary topic or subject that the user discussed in the conversation. This should be a concise phrase or sentence capturing the core theme. This will be used for categorization and discovery.
+
+7. **Hot Takes**: Extract TWO compelling statements from the transcript that represent the user's strongest or most interesting viewpoints. These "hot takes" should:
+   - Use the same voice, tone, and word choice as the user
+   - Be grammatically perfect and well-articulated (clean up any verbal stumbles or filler words)
+   - Be suitable for use in a short avatar video (typically 1-2 sentences each)
+   - Capture the user's authentic perspective and personality
+   - These will be used to create promotional avatar video clips
+
+8. **Social Post Draft**: Write engaging social media post copy (approximately 2 sentences) that will accompany the hot take avatar videos and promote the avatar agent. Structure it as:
+   - First sentence: A thesis statement that introduces the post content
+   - Second sentence: A call-to-action (CTA) inviting people to engage with the avatar
+   - Example: "Evals are the hardest part of building software. Talk to my expert avatar to learn why."
 
 ## Output Format
 
-Please provide your analysis in the following JSON structure:
+Return your analysis in the following JSON structure:
 
 ```json
 {
-  "expertise": {
-    "domain": "string - their area of expertise",
-    "summary": "string - brief description of their expertise"
-  },
-  "background": {
-    "journey": "string - how they developed their expertise",
-    "key_experiences": ["array of key experiences that shaped them"]
-  },
-  "misconceptions": [
-    {
-      "misconception": "string - first common misconception",
-      "reality": "string - what the reality actually is"
-    },
-    {
-      "misconception": "string - second common misconception", 
-      "reality": "string - what the reality actually is"
-    }
-  ],
-  "current_work": {
-    "project": "string - what they're building",
-    "description": "string - detailed description of the project",
-    "stage": "string - what stage they're at"
-  },
-  "problem_solving": {
-    "problem": "string - the problem they're solving",
-    "target_audience": "string - who benefits",
-    "impact": "string - how it helps"
-  },
-  "interests": {
-    "topics": ["array of topics they enjoy discussing"],
-    "conversation_style": "string - what makes a great conversation for them"
-  },
-  "summary": "string - 2-3 sentence overview of the person and their work"
+  "session_id": "string - from metadata",
+  "user_id": "string - from metadata",
+  "user_firstname": "string - from metadata",
+  "user_lastname": "string - from metadata",
+  "created_at": "string - from metadata (ISO format timestamp)",
+  "main_topic": "string - the primary topic discussed",
+  "conversation_narrative": "string - detailed summary with quotes, using user's name",
+  "myers_briggs_code": "string - 4-letter Myers-Briggs personality type code",
+  "personality": "string - detailed personality description",
+  "expertise_description": "string - succinct 2-4 sentence description of expertise",
+  "hot_take_1": "string - first compelling statement in user's voice",
+  "hot_take_2": "string - second compelling statement in user's voice",
+  "social_post_draft": "string - 2-sentence social post with thesis and CTA"
 }
 ```
 
-## User Statements
+## Transcript Metadata
 
-{user_statements}
+{metadata}
+
+## Conversation Transcript
+
+{transcript}
 
 ## Instructions
 
-- Extract only information that was explicitly mentioned in the conversation
-- If information for a section is not available, use "Not discussed" or an empty array
-- Be precise and use the user's own words when possible
-- Focus on concrete, specific details rather than generalizations
-- Ensure the JSON is valid and properly formatted
+**Primary Focus:**
+- The conversation_narrative is your most important output - this will be the foundation for building an avatar agent that speaks and thinks like the user
+- Prioritize completeness, depth, and authenticity in the narrative
+- Include extensive direct quotes to capture the user's actual voice and phrasing
+- Document their thought processes, reasoning, and unique perspectives
+- Always refer to the speaker by their actual name in the narrative
 
+**Avatar Personality Elements:**
+- For myers_briggs_code, carefully analyze the conversation to determine the most accurate type based on observable communication patterns and cognitive preferences
+- The personality description should be written in natural, everyday language (NOT Myers-Briggs terminology) and capture the essence of how the user presents themselves, communicates, and interacts
+- CRITICAL: Never describe the user as someone who pauses, takes time to think, or is deliberate/slow in their responses - this would cause undesirable latency in the avatar
+- The expertise_description should be concise yet comprehensive, suitable for introducing the user's avatar to others
+
+**Secondary Elements:**
+- Ensure all metadata fields are accurately copied from the provided metadata
+- For the main_topic, be specific but concise
+- For hot_takes, maintain the user's authentic voice while ensuring grammatical perfection
+- Hot takes should be punchy, memorable, and suitable for video format (avoid overly long statements)
+- The social_post_draft should be engaging, concise, and follow the thesis + CTA structure
+
+**General Requirements:**
+- Ensure the JSON is valid and properly formatted
+- Extract only information that was explicitly mentioned in the conversation
+- Maintain accuracy and fidelity to what the user actually said

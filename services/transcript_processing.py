@@ -45,7 +45,7 @@ class TranscriptProcessor:
 		logger.info("=" * 60)
 		
 		# Fetch the call data from Supabase
-		response = self.supabase.table("calls").select("*").eq("session_id", session_id).execute()
+		response = self.supabase.table("interview_calls").select("*").eq("session_id", session_id).execute()
 		
 		if not response.data or len(response.data) == 0:
 			logger.error(f"❌ No call found for session_id: {session_id}")
