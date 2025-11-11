@@ -47,6 +47,40 @@ def setup_clients():
     return supabase, ANTHROPIC_API_KEY
 
 
+def _get_user_id_from_session(supabase, session_id: str) -> str:
+    """
+    Get the user_id associated with a session.
+    
+    Args:
+        supabase: Supabase client
+        session_id: The LiveKit session ID
+        
+    Returns:
+        str: The user_id, or None if not found
+    """
+    # Try interview_call_analysis first (most recent table)
+    response = supabase.table("interview_call_analysis")\
+        .select("user_id")\
+        .eq("session_id", session_id)\
+        .limit(1)\
+        .execute()
+    
+    if response.data and len(response.data) > 0:
+        return response.data[0].get('user_id')
+    
+    # Fallback to interview_calls table
+    response = supabase.table("interview_calls")\
+        .select("user_id")\
+        .eq("session_id", session_id)\
+        .limit(1)\
+        .execute()
+    
+    if response.data and len(response.data) > 0:
+        return response.data[0].get('user_id')
+    
+    return None
+
+
 def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
     """
     Delete existing records for the session to allow clean testing.
@@ -77,9 +111,30 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
             else:
                 logger.info("  ℹ️  No existing records found")
         
-        # Profile aggregation is read-only, no cleanup needed
+        # Profile aggregation cleanup - delete from user_profiles by user_id
         if not task_name or task_name == "profile_aggregation":
-            logger.info("Profile aggregation is read-only (no cleanup needed)")
+            logger.info("Cleaning up user_profiles table...")
+            # First, get the user_id from the session
+            user_id = _get_user_id_from_session(supabase, session_id)
+            if user_id:
+                logger.info(f"  Found user_id: {user_id}")
+                # Check if profile exists before attempting deletion
+                existing = supabase.table("user_profiles")\
+                    .select("id")\
+                    .eq("user_id", user_id)\
+                    .execute()
+                
+                if existing.data and len(existing.data) > 0:
+                    # Profile exists, delete it
+                    response = supabase.table("user_profiles").delete().eq("user_id", user_id).execute()
+                    if response.data:
+                        logger.info(f"  ✅ Deleted {len(response.data)} user profile(s)")
+                    else:
+                        logger.warning("  ⚠️  Delete command succeeded but no data returned")
+                else:
+                    logger.info("  ℹ️  No existing user profile found (nothing to delete)")
+            else:
+                logger.info("  ℹ️  Could not find user_id for session (skipping cleanup)")
         
         # Add cleanup for future tasks here as they're implemented
         # Example:

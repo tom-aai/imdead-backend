@@ -29,7 +29,7 @@ class PostCallOrchestrator:
 		"""
 		self.supabase = supabase_client
 		self.transcript_processor = TranscriptProcessor(supabase_client, anthropic_api_key)
-		self.profile_aggregator = ProfileAggregator(supabase_client)
+		self.profile_aggregator = ProfileAggregator(supabase_client, anthropic_api_key)
 	
 	async def process_call_completion(self, session_id: str) -> Dict[str, Any]:
 		"""
