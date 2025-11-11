@@ -17,7 +17,10 @@ if not _loaded:
 app = Flask(__name__)
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+	level=logging.INFO,
+	format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Initialize Supabase client
@@ -28,12 +31,12 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_SERVICE_KEY:
 	supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-	logger.info("✅ Supabase client initialized")
+	logger.debug("Supabase client initialized")
 else:
-	logger.warning("⚠️ Supabase credentials not found")
+	logger.error("Supabase credentials not found")
 
 if not ANTHROPIC_API_KEY:
-	logger.warning("⚠️ Anthropic API key not found")
+	logger.error("Anthropic API key not found")
 
 # Initialize services
 post_call_orchestrator = PostCallOrchestrator(supabase, ANTHROPIC_API_KEY)
@@ -59,11 +62,11 @@ def _run_orchestrator_in_background(session_id: str):
 	try:
 		result = asyncio.run(post_call_orchestrator.process_call_completion(session_id))
 		if result["status"] == "error":
-			logger.error(f"❌ Background orchestration failed for {session_id}: {result.get('error')}")
+			logger.error(f"Background orchestration failed for {session_id}: {result.get('error')}")
 		else:
-			logger.info(f"✅ Background orchestration completed for {session_id}")
+			logger.info(f"Post-call orchestration completed for {session_id}")
 	except Exception as e:
-		logger.error(f"❌ Error in background orchestration for {session_id}: {e}", exc_info=True)
+		logger.error(f"Error in background orchestration for {session_id}: {e}", exc_info=True)
 
 
 @app.route("/post-call-orchestrator", methods=["POST"])
@@ -89,7 +92,7 @@ def post_call_orchestrator_endpoint():
 		)
 		thread.start()
 		
-		logger.info(f"🚀 Post-call orchestrator started in background for session {session_id}")
+		logger.info(f"Post-call orchestrator started for session {session_id}")
 		
 		# Return immediately
 		return jsonify({
@@ -100,7 +103,7 @@ def post_call_orchestrator_endpoint():
 		
 	except Exception as e:
 		# Handle unexpected errors
-		logger.error(f"❌ Error starting post-call orchestration: {e}", exc_info=True)
+		logger.error(f"Error starting post-call orchestration: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
 

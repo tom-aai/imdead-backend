@@ -54,18 +54,16 @@ class ProfileAggregator:
 		if not self.supabase:
 			raise Exception("Supabase client not initialized")
 		
-		logger.info("=" * 60)
-		logger.info(f"👤 AGGREGATING USER PROFILE FOR SESSION: {session_id}")
-		logger.info("=" * 60)
+		logger.info(f"Aggregating profile for session {session_id}")
 		
 		# First, get the user_id from the session
 		user_id = self._get_user_id_from_session(session_id)
 		
 		if not user_id:
-			logger.error(f"❌ Could not find user_id for session: {session_id}")
+			logger.error(f"Could not find user_id for session: {session_id}")
 			raise ValueError(f"User not found for session_id: {session_id}")
 		
-		logger.info(f"Found user_id: {user_id}")
+		logger.debug(f"Found user_id: {user_id}")
 		
 		# Fetch all call analyses for this user
 		response = self.supabase.table("interview_call_analysis")\
@@ -75,7 +73,7 @@ class ProfileAggregator:
 			.execute()
 		
 		if not response.data or len(response.data) == 0:
-			logger.warning(f"⚠️ No call analyses found for user_id: {user_id}")
+			logger.warning(f"No call analyses found for user_id: {user_id}")
 			return {
 				"status": "success",
 				"message": "No call analyses found for user",
@@ -86,14 +84,10 @@ class ProfileAggregator:
 			}
 		
 		analyses = response.data
-		logger.info(f"Found {len(analyses)} call analysis record(s) for user")
+		logger.debug(f"Found {len(analyses)} call analysis record(s) for user {user_id}")
 		
 		# Aggregate profile data
 		aggregated_profiles = []
-		
-		logger.info("\n" + "=" * 60)
-		logger.info("📊 RAW PROFILE DATA FROM ALL SESSIONS")
-		logger.info("=" * 60 + "\n")
 		
 		for idx, analysis in enumerate(analyses, 1):
 			personality = analysis.get('personality', 'N/A')
@@ -119,28 +113,15 @@ class ProfileAggregator:
 				"expertise_description": expertise,
 				"combined_profile": combined_profile
 			})
-			
-			# Print raw data to terminal
-			logger.info(f"Record {idx}/{len(analyses)}:")
-			logger.info("-" * 60)
-			logger.info(combined_profile)
-			logger.info("-" * 60 + "\n")
 		
 		# Process with Claude to synthesize the profiles
-		logger.info("Processing aggregated profiles with Claude...")
+		logger.debug(f"Synthesizing {len(aggregated_profiles)} profile(s) with LLM")
 		synthesis = self._process_with_llm(user_id, aggregated_profiles)
-		
-		# Print synthesized results to terminal
-		self._print_synthesis_results(synthesis)
 		
 		# Upload to user_profiles table
 		uploaded_record = self._upload_to_supabase(user_id, synthesis, aggregated_profiles)
 		
-		logger.info("=" * 60)
-		logger.info("✅ PROFILE AGGREGATION COMPLETE")
-		logger.info(f"Processed {len(aggregated_profiles)} record(s)")
-		logger.info(f"Profile uploaded to user_profiles with ID: {uploaded_record.get('id')}")
-		logger.info("=" * 60)
+		logger.info(f"Profile aggregation completed for user {user_id} ({len(aggregated_profiles)} sessions)")
 		
 		return {
 			"status": "success",
@@ -182,8 +163,6 @@ class ProfileAggregator:
 			.replace('{session_count}', str(len(aggregated_profiles)))\
 			.replace('{aggregated_profiles}', profiles_text)
 		
-		logger.info(f"Calling Claude API (synthesizing {len(aggregated_profiles)} session(s))")
-		
 		# Call Claude API
 		message = self.anthropic.messages.create(
 			model="claude-sonnet-4-20250514",
@@ -213,42 +192,6 @@ class ProfileAggregator:
 			json_text = response_text.strip()
 		
 		return json.loads(json_text)
-	
-	def _print_synthesis_results(self, synthesis: dict):
-		"""
-		Print the synthesized profile results to the terminal in a formatted way.
-		
-		Args:
-			synthesis: The synthesis result from Claude
-		"""
-		logger.info("\n" + "=" * 80)
-		logger.info("🧠 SYNTHESIZED PROFILE ANALYSIS")
-		logger.info("=" * 80 + "\n")
-		
-		logger.info(f"User ID: {synthesis.get('user_id')}")
-		logger.info(f"Sessions Analyzed: {synthesis.get('sessions_analyzed')}")
-		logger.info("")
-		
-		logger.info("=" * 80)
-		logger.info("CONSOLIDATED MYERS-BRIGGS TYPE")
-		logger.info("=" * 80)
-		logger.info(f"{synthesis.get('consolidated_myers_briggs')}")
-		logger.info("")
-		logger.info("Reasoning:")
-		logger.info(synthesis.get('reasoning'))
-		logger.info("")
-		
-		logger.info("=" * 80)
-		logger.info("COMPREHENSIVE PERSONALITY")
-		logger.info("=" * 80)
-		logger.info(synthesis.get('comprehensive_personality'))
-		logger.info("")
-		
-		logger.info("=" * 80)
-		logger.info("COMPREHENSIVE EXPERTISE")
-		logger.info("=" * 80)
-		logger.info(synthesis.get('comprehensive_expertise'))
-		logger.info("")
 	
 	def _upload_to_supabase(self, user_id: str, synthesis: dict, aggregated_profiles: list) -> dict:
 		"""
@@ -293,10 +236,6 @@ class ProfileAggregator:
 		if user_lastname:
 			upload_data["user_lastname"] = user_lastname
 		
-		logger.info(f"Uploading synthesized profile to user_profiles table...")
-		logger.info(f"  User ID: {user_id}")
-		logger.info(f"  Myers-Briggs: {synthesis.get('consolidated_myers_briggs')}")
-		
 		# Upsert to user_profiles table (insert or update if user_id exists)
 		# First check if a profile exists for this user
 		existing = self.supabase.table("user_profiles")\
@@ -307,20 +246,19 @@ class ProfileAggregator:
 		if existing.data and len(existing.data) > 0:
 			# Update existing record
 			profile_id = existing.data[0].get('id')
-			logger.info(f"  Updating existing profile (ID: {profile_id})")
+			logger.debug(f"Updating existing profile for user {user_id} (profile_id: {profile_id})")
 			response = self.supabase.table("user_profiles")\
 				.update(upload_data)\
 				.eq("user_id", user_id)\
 				.execute()
 		else:
 			# Insert new record
-			logger.info(f"  Creating new profile")
+			logger.debug(f"Creating new profile for user {user_id}")
 			response = self.supabase.table("user_profiles")\
 				.insert(upload_data)\
 				.execute()
 		
 		if response.data:
-			logger.info(f"✅ Successfully uploaded profile for user: {user_id}")
 			return response.data[0]
 		else:
 			raise Exception("Failed to upload profile to Supabase")

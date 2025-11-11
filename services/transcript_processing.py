@@ -50,35 +50,24 @@ class TranscriptProcessor:
 		if not self.supabase:
 			raise Exception("Supabase client not initialized")
 		
-		logger.info("=" * 60)
-		logger.info(f"📞 PROCESSING TRANSCRIPT FOR SESSION: {session_id}")
-		logger.info("=" * 60)
+		logger.info(f"Processing transcript for session {session_id}")
 		
 		# Fetch the call data from Supabase
 		response = self.supabase.table("interview_calls").select("*").eq("session_id", session_id).execute()
 		
 		if not response.data or len(response.data) == 0:
-			logger.error(f"❌ No call found for session_id: {session_id}")
+			logger.error(f"No call found for session_id: {session_id}")
 			raise ValueError(f"Call not found for session_id: {session_id}")
 		
 		call_data = response.data[0]
-		
-		# Log call metadata
-		self._log_call_metadata(call_data)
-		
-		# Log conversation transcript
 		conversation = call_data.get('conversation', {})
-		self._log_conversation(conversation)
-		
-		# Log usage statistics
-		self._log_usage_stats(call_data.get('usage', {}))
 		
 		# Format metadata and transcript for Claude processing
 		metadata = self._format_metadata(call_data)
 		transcript = self._format_transcript(conversation)
 		
 		if not transcript:
-			logger.warning("No conversation content found in transcript")
+			logger.warning(f"No conversation content found for session {session_id}")
 			return {
 				"status": "error",
 				"message": "No conversation content to process",
@@ -86,16 +75,13 @@ class TranscriptProcessor:
 			}
 		
 		# Process with Claude
-		logger.info("Processing transcript with Claude...")
+		logger.debug(f"Analyzing transcript with LLM (length: {len(transcript)} chars)")
 		analysis = self._process_with_llm(metadata, transcript)
 		
 		# Upload to interview_call_analysis table
 		uploaded_record = self._upload_to_supabase(analysis)
 		
-		logger.info("=" * 60)
-		logger.info("✅ TRANSCRIPT PROCESSING COMPLETE")
-		logger.info(f"Analysis uploaded with ID: {uploaded_record.get('id')}")
-		logger.info("=" * 60)
+		logger.info(f"Transcript processing completed for session {session_id}")
 		
 		return {
 			"status": "success",
@@ -105,50 +91,6 @@ class TranscriptProcessor:
 			"analysis": analysis
 		}
 	
-	def _log_call_metadata(self, call_data: dict):
-		"""Log call metadata information."""
-		logger.info(f"User ID: {call_data.get('user_id', 'N/A')}")
-		logger.info(f"User Name: {call_data.get('user_firstname', '')} {call_data.get('user_lastname', '')}")
-		logger.info(f"Picture ID: {call_data.get('picture_id', 'N/A')}")
-		logger.info(f"Timestamp: {call_data.get('timestamp', 'N/A')}")
-		logger.info(f"Job ID: {call_data.get('job_id', 'N/A')}")
-	
-	def _log_conversation(self, conversation: dict):
-		"""Log the conversation transcript."""
-		items = conversation.get('items', [])
-		logger.info(f"\n📝 CONVERSATION TRANSCRIPT ({len(items)} items):")
-		logger.info("-" * 60)
-		
-		for i, item in enumerate(items, 1):
-			role = item.get('role', 'unknown')
-			content = item.get('content', '')
-			
-			# Handle different content formats
-			if isinstance(content, list):
-				# Content is a list of messages
-				for msg in content:
-					if isinstance(msg, dict):
-						text = msg.get('text', msg.get('transcript', ''))
-						if text:
-							logger.info(f"{i}. [{role.upper()}]: {text}")
-					else:
-						logger.info(f"{i}. [{role.upper()}]: {msg}")
-			elif isinstance(content, str):
-				logger.info(f"{i}. [{role.upper()}]: {content}")
-			else:
-				logger.info(f"{i}. [{role.upper()}]: {content}")
-		
-		logger.info("-" * 60)
-	
-	def _log_usage_stats(self, usage: dict):
-		"""Log usage statistics."""
-		if usage:
-			logger.info(f"\n📊 USAGE STATISTICS:")
-			logger.info(f"  LLM Prompt Tokens: {usage.get('llm_prompt_tokens', 0)}")
-			logger.info(f"  LLM Completion Tokens: {usage.get('llm_completion_tokens', 0)}")
-			logger.info(f"  TTS Characters: {usage.get('tts_characters_count', 0)}")
-			logger.info(f"  TTS Audio Duration: {usage.get('tts_audio_duration', 0):.1f}s")
-			logger.info(f"  STT Audio Duration: {usage.get('stt_audio_duration', 0):.1f}s")
 	
 	def _format_metadata(self, call_data: dict) -> str:
 		"""
@@ -219,8 +161,6 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 		# Replace placeholders with actual data
 		prompt = prompt_template.replace('{metadata}', metadata).replace('{transcript}', transcript)
 		
-		logger.info(f"Calling Claude API (transcript length: {len(transcript)} chars)")
-		
 		# Call Claude API
 		message = self.anthropic.messages.create(
 			model="claude-sonnet-4-20250514",
@@ -283,13 +223,11 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 			"hot_take_video_2": None
 		}
 		
-		logger.info(f"Uploading analysis to interview_call_analysis table...")
-		
 		# Insert into Supabase (upsert to handle re-processing)
 		response = self.supabase.table("interview_call_analysis").upsert(upload_data).execute()
 		
 		if response.data:
-			logger.info(f"✅ Successfully uploaded analysis for session: {upload_data['session_id']}")
+			logger.debug(f"Uploaded analysis to database (session: {upload_data['session_id']})")
 			return response.data[0]
 		else:
 			raise Exception("Failed to upload analysis to Supabase")

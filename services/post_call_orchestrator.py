@@ -50,10 +50,7 @@ class PostCallOrchestrator:
 		Returns:
 			dict: Processing results with status and data
 		"""
-		logger.info("=" * 60)
-		logger.info(f"🎬 POST-CALL ORCHESTRATION STARTED")
-		logger.info(f"Session ID: {session_id}")
-		logger.info("=" * 60)
+		logger.info(f"Starting post-call orchestration for session {session_id}")
 		
 		results = {
 			"session_id": session_id,
@@ -90,13 +87,10 @@ class PostCallOrchestrator:
 			#     )
 			#     results["tasks"]["voice_cloning"] = voice_result
 			
-			logger.info("=" * 60)
-			logger.info("✅ POST-CALL ORCHESTRATION COMPLETED SUCCESSFULLY")
-			logger.info(f"Completed tasks: {len(results['tasks'])}")
-			logger.info("=" * 60)
+			logger.info(f"Post-call orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
 			
 		except Exception as e:
-			logger.error(f"❌ Post-call orchestration failed: {e}")
+			logger.error(f"Post-call orchestration failed for session {session_id}: {e}")
 			results["status"] = "error"
 			results["error"] = str(e)
 		
@@ -127,7 +121,7 @@ class PostCallOrchestrator:
 		
 		for attempt in range(max_retries):
 			try:
-				logger.info(f"🔄 Running task: {task_name} (attempt {attempt + 1}/{max_retries})")
+				logger.debug(f"Running task {task_name} (attempt {attempt + 1}/{max_retries})")
 				
 				# Run the task (handle both sync and async functions)
 				if asyncio.iscoroutinefunction(task_func):
@@ -136,7 +130,8 @@ class PostCallOrchestrator:
 					# Run sync function in thread pool to avoid blocking
 					result = await asyncio.to_thread(task_func, *args, **kwargs)
 				
-				logger.info(f"✅ Task completed: {task_name}")
+				if attempt > 0:
+					logger.info(f"Task {task_name} succeeded on attempt {attempt + 1}")
 				return {
 					"status": "success",
 					"result": result,
@@ -145,15 +140,15 @@ class PostCallOrchestrator:
 				
 			except Exception as e:
 				last_error = e
-				logger.warning(f"⚠️ Task {task_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
+				logger.warning(f"Task {task_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
 				
 				if attempt < max_retries - 1:
 					# Exponential backoff: 2^attempt seconds
 					backoff_time = 2 ** attempt
-					logger.info(f"Retrying in {backoff_time} seconds...")
+					logger.debug(f"Retrying in {backoff_time} seconds...")
 					await asyncio.sleep(backoff_time)
 				else:
-					logger.error(f"❌ Task {task_name} failed after {max_retries} attempts")
+					logger.error(f"Task {task_name} failed after {max_retries} attempts: {e}")
 		
 		# All retries exhausted
 		return {

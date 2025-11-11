@@ -90,34 +90,20 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
         session_id: The session ID to clean up
         task_name: Specific task to clean (None = clean all tasks)
     """
-    logger.info("=" * 60)
-    logger.info("🧹 CLEANING UP EXISTING RECORDS")
-    logger.info(f"Session ID: {session_id}")
-    
-    if task_name:
-        logger.info(f"Task: {task_name}")
-    else:
-        logger.info("Task: ALL TASKS")
-    
-    logger.info("=" * 60)
+    logger.info(f"Cleaning up records for session {session_id}" + (f" (task: {task_name})" if task_name else " (all tasks)"))
     
     try:
         # Clean up transcript processing results (always in interview_call_analysis)
         if not task_name or task_name == "transcript_processing":
-            logger.info("Deleting from interview_call_analysis table...")
             response = supabase.table("interview_call_analysis").delete().eq("session_id", session_id).execute()
             if response.data:
-                logger.info(f"  ✅ Deleted {len(response.data)} record(s)")
-            else:
-                logger.info("  ℹ️  No existing records found")
+                logger.debug(f"Deleted {len(response.data)} record(s) from interview_call_analysis")
         
         # Profile aggregation cleanup - delete from user_profiles by user_id
         if not task_name or task_name == "profile_aggregation":
-            logger.info("Cleaning up user_profiles table...")
             # First, get the user_id from the session
             user_id = _get_user_id_from_session(supabase, session_id)
             if user_id:
-                logger.info(f"  Found user_id: {user_id}")
                 # Check if profile exists before attempting deletion
                 existing = supabase.table("user_profiles")\
                     .select("id")\
@@ -128,29 +114,22 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
                     # Profile exists, delete it
                     response = supabase.table("user_profiles").delete().eq("user_id", user_id).execute()
                     if response.data:
-                        logger.info(f"  ✅ Deleted {len(response.data)} user profile(s)")
-                    else:
-                        logger.warning("  ⚠️  Delete command succeeded but no data returned")
-                else:
-                    logger.info("  ℹ️  No existing user profile found (nothing to delete)")
-            else:
-                logger.info("  ℹ️  Could not find user_id for session (skipping cleanup)")
+                        logger.debug(f"Deleted {len(response.data)} user profile(s)")
         
         # Add cleanup for future tasks here as they're implemented
         # Example:
         # if not task_name or task_name == "voice_cloning":
-        #     logger.info("Deleting from voice_clones table...")
         #     response = supabase.table("voice_clones").delete().eq("session_id", session_id).execute()
         
-        logger.info("✅ Cleanup complete\n")
+        logger.debug("Cleanup complete")
         
     except Exception as e:
-        logger.warning(f"⚠️  Cleanup failed (this may be okay if no records exist): {e}\n")
+        logger.warning(f"Cleanup failed (this may be okay if no records exist): {e}")
 
 
 async def run_full_orchestration(orchestrator: PostCallOrchestrator, session_id: str, supabase):
     """Run the complete post-call orchestration flow."""
-    logger.info("Running FULL orchestration (all tasks)")
+    logger.info(f"Running full orchestration for session {session_id}")
     
     # Clean up all existing records for this session
     cleanup_existing_records(supabase, session_id)
@@ -161,7 +140,7 @@ async def run_full_orchestration(orchestrator: PostCallOrchestrator, session_id:
 
 async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, task_name: str, supabase):
     """Run a single task from the orchestrator."""
-    logger.info(f"Running SINGLE task: {task_name}")
+    logger.info(f"Running single task: {task_name} for session {session_id}")
     
     # Clean up only the records for this specific task
     cleanup_existing_records(supabase, session_id, task_name)
@@ -266,17 +245,17 @@ Examples:
         
         # Exit with appropriate status code
         if results.get("status") == "success":
-            logger.info("✅ Orchestration completed successfully")
+            logger.info("Orchestration completed successfully")
             sys.exit(0)
         else:
-            logger.error("❌ Orchestration completed with errors")
+            logger.error("Orchestration completed with errors")
             sys.exit(1)
             
     except KeyboardInterrupt:
-        logger.info("\n⚠️  Interrupted by user")
+        logger.info("\nInterrupted by user")
         sys.exit(130)
     except Exception as e:
-        logger.error(f"❌ Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
