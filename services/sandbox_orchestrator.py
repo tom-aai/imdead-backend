@@ -99,22 +99,22 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
             if response.data:
                 logger.debug(f"Deleted {len(response.data)} record(s) from interview_call_analysis")
         
-		# Profile aggregation cleanup - check if profile exists and delete from user_profiles by user_id
-		if not task_name or task_name == "profile_aggregation":
-			# First, get the user_id from the session
-			user_id = _get_user_id_from_session(supabase, session_id)
-			if user_id:
-				# Check if profile exists before attempting deletion
-				existing = supabase.table("user_profiles")\
-					.select("id")\
-					.eq("user_id", user_id)\
-					.execute()
-				
-				if existing.data and len(existing.data) > 0:
-					# Profile exists, delete it
-					response = supabase.table("user_profiles").delete().eq("user_id", user_id).execute()
-					if response.data:
-						logger.debug(f"Deleted {len(response.data)} user profile(s)")
+        # Profile aggregation cleanup - check if profile exists and delete from user_profiles by user_id
+        if not task_name or task_name == "profile_aggregation":
+            # First, get the user_id from the session
+            user_id = _get_user_id_from_session(supabase, session_id)
+            if user_id:
+                # Check if profile exists before attempting deletion
+                existing = supabase.table("user_profiles")\
+                    .select("id")\
+                    .eq("user_id", user_id)\
+                    .execute()
+                
+                if existing.data and len(existing.data) > 0:
+                    # Profile exists, delete it
+                    response = supabase.table("user_profiles").delete().eq("user_id", user_id).execute()
+                    if response.data:
+                        logger.debug(f"Deleted {len(response.data)} user profile(s)")
         
         # Add cleanup for future tasks here as they're implemented
         # Example:
@@ -183,12 +183,51 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
 
 
 def print_results(results: dict):
-    """Pretty print the orchestration results."""
+    """Pretty print the orchestration results in a concise format."""
     print("\n" + "=" * 80)
     print("ORCHESTRATION RESULTS")
     print("=" * 80)
-    print(json.dumps(results, indent=2, default=str))
+    
+    # Create a summary version without verbose fields
+    summary = {
+        "session_id": results.get("session_id"),
+        "status": results.get("status"),
+        "tasks": {}
+    }
+    
+    # Summarize each task
+    for task_name, task_result in results.get("tasks", {}).items():
+        task_summary = {
+            "status": task_result.get("status"),
+            "attempts": task_result.get("attempts")
+        }
+        
+        # Add concise task-specific info
+        if task_result.get("status") == "success" and "result" in task_result:
+            result = task_result["result"]
+            
+            if task_name == "transcript_processing":
+                task_summary["analysis_id"] = result.get("analysis_id")
+                task_summary["main_topic"] = result.get("analysis", {}).get("main_topic")
+                task_summary["myers_briggs"] = result.get("analysis", {}).get("myers_briggs_code")
+                
+            elif task_name == "profile_aggregation":
+                task_summary["profile_id"] = result.get("profile_id")
+                task_summary["sessions_analyzed"] = result.get("record_count")
+                task_summary["consolidated_myers_briggs"] = result.get("synthesis", {}).get("consolidated_myers_briggs")
+                
+        elif task_result.get("status") == "error":
+            task_summary["error"] = task_result.get("error")
+        
+        summary["tasks"][task_name] = task_summary
+    
+    print(json.dumps(summary, indent=2, default=str))
     print("=" * 80 + "\n")
+    
+    # Print helpful note about full data
+    if results.get("status") == "success":
+        print("✓ All data has been saved to Supabase. Use the analysis_id or profile_id to retrieve full details.")
+        print()
 
 
 async def main():
