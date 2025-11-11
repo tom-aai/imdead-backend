@@ -254,7 +254,7 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 	def _upload_to_supabase(self, analysis_data: dict) -> dict:
 		"""
 		Upload analysis data to interview_call_analysis table.
-		Excludes myers_briggs_code, personality, and expertise_description.
+		Includes all fields from transcript analysis.
 		
 		Args:
 			analysis_data: Dict containing the full analysis from Claude
@@ -262,7 +262,7 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 		Returns:
 			dict: The inserted record from Supabase
 		"""
-		# Prepare data for upload (exclude unwanted fields)
+		# Prepare data for upload
 		upload_data = {
 			"session_id": analysis_data.get("session_id"),
 			"user_id": analysis_data.get("user_id"),
@@ -271,6 +271,9 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 			"created_at": analysis_data.get("created_at"),
 			"main_topic": analysis_data.get("main_topic"),
 			"conversation_narrative": analysis_data.get("conversation_narrative"),
+			"myers_briggs_code": analysis_data.get("myers_briggs_code"),
+			"personality": analysis_data.get("personality"),
+			"expertise_description": analysis_data.get("expertise_description"),
 			"hot_take_1": analysis_data.get("hot_take_1"),
 			"hot_take_2": analysis_data.get("hot_take_2"),
 			"social_post_draft": analysis_data.get("social_post_draft"),
