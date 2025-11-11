@@ -1,6 +1,6 @@
 # Transcript Analysis Prompt
 
-You are analyzing a conversation transcript to create an expert avatar agent. Your primary task is to extract and structure information that will be used to build an AI agent that emulates the user, allowing others to have conversations with their avatar about their expertise.
+You are analyzing a conversation transcript to create an expert avatar agent. Your primary task is to extract and structure information that will be used to build an AI agent that emulates the user, allowing others to have conversations with the user's avatar about the user's expertise.
 
 ## Primary Goal: Create Avatar Agent Content
 

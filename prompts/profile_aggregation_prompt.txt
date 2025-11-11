@@ -1,6 +1,6 @@
 # Profile Aggregation Prompt
 
-You are analyzing multiple interview call analyses for a single user to create a comprehensive, unified profile. Your task is to aggregate and synthesize information from all of the user's past conversations into a cohesive, detailed profile that captures their complete personality and expertise.
+You are analyzing multiple interview call analyses for a single user to create a comprehensive, unified profile. Your task is to aggregate and synthesize information from all of the user's past conversations into a cohesive, detailed profile that captures their complete personality and expertise. The user profile data will be used to build an AI avatar agent that emulates the user, allowing others to have conversations with the user's avatar about the user's expertise.
 
 ## Your Task
 
