@@ -35,12 +35,12 @@ class ProfileAggregator:
 		Aggregate user profile data from all interview call analyses for the user.
 		
 		Reads the interview_call_analysis table for all records from the user who made the call,
-		extracts personality, myers-briggs code, and expertise description fields,
+		extracts personality, myers-briggs type, and expertise description fields,
 		processes them with Claude to synthesize a unified profile, and uploads the
 		synthesized profile to the user_profiles table.
 		
 		Args:
-			session_id: The LiveKit session ID to identify the user
+			session_id: The LiveKit session ID from the user's most recent call.
 			
 		Returns:
 			dict: Processing result with status, aggregated data, synthesis, and profile_id
