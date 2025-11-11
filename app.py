@@ -1,6 +1,7 @@
 import os
 import logging
 import asyncio
+import threading
 
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
@@ -50,12 +51,27 @@ def health():
 	return jsonify({"status": "healthy"})
 
 
+def _run_orchestrator_in_background(session_id: str):
+	"""
+	Run the orchestrator in a background thread.
+	This allows the endpoint to return immediately while processing continues.
+	"""
+	try:
+		result = asyncio.run(post_call_orchestrator.process_call_completion(session_id))
+		if result["status"] == "error":
+			logger.error(f"❌ Background orchestration failed for {session_id}: {result.get('error')}")
+		else:
+			logger.info(f"✅ Background orchestration completed for {session_id}")
+	except Exception as e:
+		logger.error(f"❌ Error in background orchestration for {session_id}: {e}", exc_info=True)
+
+
 @app.route("/post-call-orchestrator", methods=["POST"])
 def post_call_orchestrator_endpoint():
 	"""
 	Orchestrate all post-call processing after a call completes.
 	Called by the LiveKit agent after saving the transcript to Supabase.
-	Uses the post-call orchestrator to coordinate all post-call tasks.
+	Returns immediately and runs orchestration in the background.
 	"""
 	try:
 		# Get session_id from request
@@ -65,38 +81,26 @@ def post_call_orchestrator_endpoint():
 		if not session_id:
 			return jsonify({"error": "session_id is required"}), 400
 		
-		# Run the orchestrator (async -> sync conversion for Flask)
-		result = asyncio.run(post_call_orchestrator.process_call_completion(session_id))
+		# Start orchestrator in background thread
+		thread = threading.Thread(
+			target=_run_orchestrator_in_background,
+			args=(session_id,),
+			daemon=True
+		)
+		thread.start()
 		
-		# Check if orchestration succeeded
-		if result["status"] == "error":
-			logger.error(f"❌ Post-call orchestration failed: {result.get('error')}")
-			return jsonify({
-				"status": "error",
-				"message": result.get("error"),
-				"session_id": session_id
-			}), 500
+		logger.info(f"🚀 Post-call orchestrator started in background for session {session_id}")
 		
-		# Extract transcript processing result
-		transcript_task = result.get("tasks", {}).get("transcript_processing", {})
-		transcript_result = transcript_task.get("result", {})
-		
+		# Return immediately
 		return jsonify({
-			"status": "success",
-			"message": "Post-call processing completed successfully",
-			"session_id": session_id,
-			"tasks_completed": len(result.get("tasks", {})),
-			"transcript_analysis_id": transcript_result.get("analysis_id")
+			"status": "processing",
+			"message": "Post-call orchestration started in background",
+			"session_id": session_id
 		}), 200
-		
-	except ValueError as e:
-		# Handle validation errors (missing session_id, call not found, etc.)
-		logger.error(f"❌ Validation error: {e}")
-		return jsonify({"error": str(e)}), 400 if "required" in str(e) else 404
 		
 	except Exception as e:
 		# Handle unexpected errors
-		logger.error(f"❌ Error in post-call processing: {e}", exc_info=True)
+		logger.error(f"❌ Error starting post-call orchestration: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
 
