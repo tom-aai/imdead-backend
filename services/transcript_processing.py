@@ -217,13 +217,13 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 			"hot_take_1": analysis_data.get("hot_take_1"),
 			"hot_take_2": analysis_data.get("hot_take_2"),
 			"social_post_draft": analysis_data.get("social_post_draft"),
-			# Nullable fields (will be filled later)
+			# Nullable fields (will be populated by future tasks)
 			"avatar_chat_prompt": None,
 			"hot_take_video_1": None,
 			"hot_take_video_2": None
 		}
 		
-		# Insert into Supabase (upsert to handle re-processing)
+		# Upsert into Supabase (allows re-processing of the same session)
 		response = self.supabase.table("interview_call_analysis").upsert(upload_data).execute()
 		
 		if response.data:

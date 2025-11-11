@@ -34,15 +34,16 @@ class ProfileAggregator:
 		"""
 		Aggregate user profile data from all interview call analyses for the user.
 		
-		Reads the interview_call_analysis table for all records from the user who made the call.
-		Extracts personality, myers-briggs score, and expertise description fields,
-		combines them into one string per record, and returns the aggregated data.
+		Reads the interview_call_analysis table for all records from the user who made the call,
+		extracts personality, myers-briggs code, and expertise description fields,
+		processes them with Claude to synthesize a unified profile, and uploads the
+		synthesized profile to the user_profiles table.
 		
 		Args:
 			session_id: The LiveKit session ID to identify the user
 			
 		Returns:
-			dict: Processing result with status and aggregated data
+			dict: Processing result with status, aggregated data, synthesis, and profile_id
 			
 		Raises:
 			ValueError: If session_id is invalid or call not found
@@ -205,12 +206,12 @@ class ProfileAggregator:
 		Returns:
 			dict: The inserted/updated record from Supabase
 		"""
-		# Get user's first and last name from the most recent analysis
+		# Get user's first and last name from the most recent analysis (last item in chronologically ordered list)
 		user_firstname = None
 		user_lastname = None
 		
 		if aggregated_profiles and len(aggregated_profiles) > 0:
-			# Try to get from aggregated profiles (need to fetch from full analysis record)
+			# Fetch user name fields from the latest session's analysis record
 			latest_session_id = aggregated_profiles[-1].get('session_id')
 			response = self.supabase.table("interview_call_analysis")\
 				.select("user_firstname, user_lastname")\
