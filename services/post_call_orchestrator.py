@@ -1,0 +1,182 @@
+"""
+Post-call orchestrator service.
+Coordinates all post-call processing tasks with retry logic.
+"""
+
+import asyncio
+import logging
+from typing import Dict, Any, Optional
+
+from services.transcript_processing import TranscriptProcessor
+
+logger = logging.getLogger(__name__)
+
+
+class PostCallOrchestrator:
+	"""
+	Orchestrates all post-call processing tasks.
+	Handles task execution, retries, and error management.
+	"""
+	
+	def __init__(self, supabase_client, anthropic_api_key: str = None):
+		"""
+		Initialize the post-call orchestrator.
+		
+		Args:
+			supabase_client: Initialized Supabase client
+			anthropic_api_key: Anthropic API key (optional, will use env var if not provided)
+		"""
+		self.supabase = supabase_client
+		self.transcript_processor = TranscriptProcessor(supabase_client, anthropic_api_key)
+	
+	async def process_call_completion(self, session_id: str) -> Dict[str, Any]:
+		"""
+		Orchestrate all post-call processing tasks for a completed call.
+		
+		Currently runs:
+		- Transcript processing and analysis
+		
+		Future tasks can be added here:
+		- Voice cloning (for first-time users)
+		- User profile updates
+		- Hot take video generation
+		- Social post creation
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			dict: Processing results with status and data
+		"""
+		logger.info("=" * 60)
+		logger.info(f"🎬 POST-CALL ORCHESTRATION STARTED")
+		logger.info(f"Session ID: {session_id}")
+		logger.info("=" * 60)
+		
+		results = {
+			"session_id": session_id,
+			"status": "success",
+			"tasks": {}
+		}
+		
+		try:
+			# Task 1: Process transcript with retry
+			transcript_result = await self._run_with_retry(
+				task_name="transcript_processing",
+				task_func=self._process_transcript,
+				session_id=session_id,
+				max_retries=3
+			)
+			results["tasks"]["transcript_processing"] = transcript_result
+			
+			# Future tasks can be added here
+			# Example:
+			# if await self._is_first_call(session_id):
+			#     voice_result = await self._run_with_retry(
+			#         task_name="voice_cloning",
+			#         task_func=self._clone_voice,
+			#         session_id=session_id
+			#     )
+			#     results["tasks"]["voice_cloning"] = voice_result
+			
+			logger.info("=" * 60)
+			logger.info("✅ POST-CALL ORCHESTRATION COMPLETED SUCCESSFULLY")
+			logger.info(f"Completed tasks: {len(results['tasks'])}")
+			logger.info("=" * 60)
+			
+		except Exception as e:
+			logger.error(f"❌ Post-call orchestration failed: {e}")
+			results["status"] = "error"
+			results["error"] = str(e)
+		
+		return results
+	
+	async def _run_with_retry(
+		self,
+		task_name: str,
+		task_func,
+		*args,
+		max_retries: int = 3,
+		**kwargs
+	) -> Dict[str, Any]:
+		"""
+		Run a task with exponential backoff retry logic.
+		
+		Args:
+			task_name: Name of the task for logging
+			task_func: The function to execute
+			*args: Positional arguments for the task function
+			max_retries: Maximum number of retry attempts
+			**kwargs: Keyword arguments for the task function
+			
+		Returns:
+			dict: Task result with status and data
+		"""
+		last_error = None
+		
+		for attempt in range(max_retries):
+			try:
+				logger.info(f"🔄 Running task: {task_name} (attempt {attempt + 1}/{max_retries})")
+				
+				# Run the task (handle both sync and async functions)
+				if asyncio.iscoroutinefunction(task_func):
+					result = await task_func(*args, **kwargs)
+				else:
+					# Run sync function in thread pool to avoid blocking
+					result = await asyncio.to_thread(task_func, *args, **kwargs)
+				
+				logger.info(f"✅ Task completed: {task_name}")
+				return {
+					"status": "success",
+					"result": result,
+					"attempts": attempt + 1
+				}
+				
+			except Exception as e:
+				last_error = e
+				logger.warning(f"⚠️ Task {task_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
+				
+				if attempt < max_retries - 1:
+					# Exponential backoff: 2^attempt seconds
+					backoff_time = 2 ** attempt
+					logger.info(f"Retrying in {backoff_time} seconds...")
+					await asyncio.sleep(backoff_time)
+				else:
+					logger.error(f"❌ Task {task_name} failed after {max_retries} attempts")
+		
+		# All retries exhausted
+		return {
+			"status": "error",
+			"error": str(last_error),
+			"attempts": max_retries
+		}
+	
+	def _process_transcript(self, session_id: str) -> dict:
+		"""
+		Process and analyze the call transcript.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			dict: Transcript processing result
+		"""
+		return self.transcript_processor.process_transcript(session_id)
+	
+	# Future task methods can be added below:
+	
+	# async def _is_first_call(self, session_id: str) -> bool:
+	# 	"""Check if this is the user's first call"""
+	# 	# Implementation here
+	# 	pass
+	
+	# async def _clone_voice(self, session_id: str) -> dict:
+	# 	"""Clone user's voice from the call audio"""
+	# 	# Implementation here
+	# 	pass
+	
+	# async def _update_user_profile(self, session_id: str, transcript_analysis: dict) -> dict:
+	# 	"""Update user profile with transcript analysis results"""
+	# 	# Implementation here
+	# 	pass
+

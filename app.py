@@ -1,11 +1,12 @@
 import os
 import logging
+import asyncio
 
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-from services.transcript_processing import TranscriptProcessor
+from services.post_call_orchestrator import PostCallOrchestrator
 
 # Load environment variables: prefer .env.local, fallback to default .env if present
 _loaded = load_dotenv(".env.local")
@@ -34,7 +35,7 @@ if not ANTHROPIC_API_KEY:
 	logger.warning("⚠️ Anthropic API key not found")
 
 # Initialize services
-transcript_processor = TranscriptProcessor(supabase, ANTHROPIC_API_KEY)
+post_call_orchestrator = PostCallOrchestrator(supabase, ANTHROPIC_API_KEY)
 
 
 @app.route("/")
@@ -49,24 +50,43 @@ def health():
 	return jsonify({"status": "healthy"})
 
 
-@app.route("/process-transcript", methods=["POST"])
-def process_transcript():
+@app.route("/post-call-orchestrator", methods=["POST"])
+def post_call_orchestrator_endpoint():
 	"""
-	Process transcript after a call completes.
+	Orchestrate all post-call processing after a call completes.
 	Called by the LiveKit agent after saving the transcript to Supabase.
+	Uses the post-call orchestrator to coordinate all post-call tasks.
 	"""
 	try:
 		# Get session_id from request
 		data = request.get_json()
 		session_id = data.get("session_id")
 		
-		# Process the transcript using the service
-		result = transcript_processor.process_transcript(session_id)
+		if not session_id:
+			return jsonify({"error": "session_id is required"}), 400
+		
+		# Run the orchestrator (async -> sync conversion for Flask)
+		result = asyncio.run(post_call_orchestrator.process_call_completion(session_id))
+		
+		# Check if orchestration succeeded
+		if result["status"] == "error":
+			logger.error(f"❌ Post-call orchestration failed: {result.get('error')}")
+			return jsonify({
+				"status": "error",
+				"message": result.get("error"),
+				"session_id": session_id
+			}), 500
+		
+		# Extract transcript processing result
+		transcript_task = result.get("tasks", {}).get("transcript_processing", {})
+		transcript_result = transcript_task.get("result", {})
 		
 		return jsonify({
-			"status": result["status"],
-			"message": result["message"],
-			"session_id": result["session_id"]
+			"status": "success",
+			"message": "Post-call processing completed successfully",
+			"session_id": session_id,
+			"tasks_completed": len(result.get("tasks", {})),
+			"transcript_analysis_id": transcript_result.get("analysis_id")
 		}), 200
 		
 	except ValueError as e:
@@ -76,7 +96,7 @@ def process_transcript():
 		
 	except Exception as e:
 		# Handle unexpected errors
-		logger.error(f"❌ Error processing transcript: {e}", exc_info=True)
+		logger.error(f"❌ Error in post-call processing: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
 
