@@ -8,6 +8,7 @@ import logging
 from typing import Dict, Any, Optional
 
 from services.transcript_processing import TranscriptProcessor
+from services.profile_aggregation import ProfileAggregator
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class PostCallOrchestrator:
 		"""
 		self.supabase = supabase_client
 		self.transcript_processor = TranscriptProcessor(supabase_client, anthropic_api_key)
+		self.profile_aggregator = ProfileAggregator(supabase_client)
 	
 	async def process_call_completion(self, session_id: str) -> Dict[str, Any]:
 		"""
@@ -35,10 +37,10 @@ class PostCallOrchestrator:
 		
 		Currently runs:
 		- Transcript processing and analysis
+		- User profile aggregation
 		
 		Future tasks can be added here:
 		- Voice cloning (for first-time users)
-		- User profile updates
 		- Hot take video generation
 		- Social post creation
 		
@@ -68,6 +70,15 @@ class PostCallOrchestrator:
 				max_retries=3
 			)
 			results["tasks"]["transcript_processing"] = transcript_result
+			
+			# Task 2: Aggregate user profile data
+			profile_result = await self._run_with_retry(
+				task_name="profile_aggregation",
+				task_func=self._aggregate_profile,
+				session_id=session_id,
+				max_retries=3
+			)
+			results["tasks"]["profile_aggregation"] = profile_result
 			
 			# Future tasks can be added here
 			# Example:
@@ -162,6 +173,18 @@ class PostCallOrchestrator:
 			dict: Transcript processing result
 		"""
 		return self.transcript_processor.process_transcript(session_id)
+	
+	def _aggregate_profile(self, session_id: str) -> dict:
+		"""
+		Aggregate user profile data from all past call analyses.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			dict: Profile aggregation result
+		"""
+		return self.profile_aggregator.aggregate_user_profile(session_id)
 	
 	# Future task methods can be added below:
 	

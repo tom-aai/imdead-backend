@@ -77,6 +77,10 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
             else:
                 logger.info("  ℹ️  No existing records found")
         
+        # Profile aggregation is read-only, no cleanup needed
+        if not task_name or task_name == "profile_aggregation":
+            logger.info("Profile aggregation is read-only (no cleanup needed)")
+        
         # Add cleanup for future tasks here as they're implemented
         # Example:
         # if not task_name or task_name == "voice_cloning":
@@ -121,10 +125,25 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
                 "transcript_processing": result
             }
         }
+    elif task_name == "profile_aggregation":
+        result = await orchestrator._run_with_retry(
+            task_name="profile_aggregation",
+            task_func=orchestrator._aggregate_profile,
+            session_id=session_id,
+            max_retries=3
+        )
+        return {
+            "session_id": session_id,
+            "status": "success",
+            "tasks": {
+                "profile_aggregation": result
+            }
+        }
     else:
         logger.error(f"Unknown task: {task_name}")
         logger.info("Available tasks:")
         logger.info("  - transcript_processing")
+        logger.info("  - profile_aggregation")
         logger.info("  (more tasks will be added as they're implemented)")
         sys.exit(1)
 
@@ -151,8 +170,11 @@ Examples:
   # Run only transcript processing
   python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task transcript_processing
   
+  # Run only profile aggregation
+  python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task profile_aggregation
+  
   # Run with specific task (explicitly)
-  python sandbox_orchestrator.py -s RM_7Vn7ZtZWQxZX -t transcript_processing
+  python sandbox_orchestrator.py -s RM_7Vn7ZtZWQxZX -t profile_aggregation
         """
     )
     
