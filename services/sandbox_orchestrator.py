@@ -83,7 +83,8 @@ def _get_user_id_from_session(supabase, session_id: str) -> str:
 
 def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
     """
-    Delete existing records for the session to allow clean testing.
+    Delete existing records for tasks that create new records (e.g., transcript_processing).
+    Does NOT delete records for tasks that update existing records (e.g., profile_aggregation).
     
     Args:
         supabase: Supabase client
@@ -99,22 +100,12 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
             if response.data:
                 logger.debug(f"Deleted {len(response.data)} record(s) from interview_call_analysis")
         
-        # Profile aggregation cleanup - check if profile exists and delete from user_profiles by user_id
+        # Profile aggregation cleanup - NO deletion needed
+        # Profile aggregation updates existing records, so we don't delete them during cleanup
         if not task_name or task_name == "profile_aggregation":
-            # First, get the user_id from the session
-            user_id = _get_user_id_from_session(supabase, session_id)
-            if user_id:
-                # Check if profile exists before attempting deletion
-                existing = supabase.table("user_profiles")\
-                    .select("id")\
-                    .eq("user_id", user_id)\
-                    .execute()
-                
-                if existing.data and len(existing.data) > 0:
-                    # Profile exists, delete it
-                    response = supabase.table("user_profiles").delete().eq("user_id", user_id).execute()
-                    if response.data:
-                        logger.debug(f"Deleted {len(response.data)} user profile(s)")
+            # Profile aggregation service handles upsert logic internally
+            # No cleanup needed here since we want to test updating existing records
+            logger.debug("Skipping user_profiles cleanup - profile_aggregation updates existing records")
         
         # Add cleanup for future tasks here as they're implemented
         # Example:
