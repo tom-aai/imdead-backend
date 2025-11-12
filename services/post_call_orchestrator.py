@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 
 from services.transcript_processing import TranscriptProcessor
 from services.profile_aggregation import ProfileAggregator
+from services.hedra_avatar_generation import HedraAvatarGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -19,17 +20,19 @@ class PostCallOrchestrator:
 	Handles task execution, retries, and error management.
 	"""
 	
-	def __init__(self, supabase_client, anthropic_api_key: str = None):
+	def __init__(self, supabase_client, anthropic_api_key: str = None, hedra_api_key: str = None):
 		"""
 		Initialize the post-call orchestrator.
 		
 		Args:
 			supabase_client: Initialized Supabase client
 			anthropic_api_key: Anthropic API key (optional, will use env var if not provided)
+			hedra_api_key: Hedra API key (optional, will use env var if not provided)
 		"""
 		self.supabase = supabase_client
 		self.transcript_processor = TranscriptProcessor(supabase_client, anthropic_api_key)
 		self.profile_aggregator = ProfileAggregator(supabase_client, anthropic_api_key)
+		self.hedra_avatar_generator = HedraAvatarGenerator(supabase_client, hedra_api_key)
 	
 	async def process_call_completion(self, session_id: str) -> Dict[str, Any]:
 		"""
@@ -38,11 +41,11 @@ class PostCallOrchestrator:
 		Currently runs:
 		- Transcript processing and analysis
 		- User profile aggregation
+		- Hedra avatar generation from user image
 		
 		Future tasks can be added here:
 		- Voice cloning (for first-time users)
 		- Hot take video generation
-		- Social post creation
 		
 		Args:
 			session_id: The LiveKit session ID
@@ -76,6 +79,15 @@ class PostCallOrchestrator:
 				max_retries=3
 			)
 			results["tasks"]["profile_aggregation"] = profile_result
+			
+			# Task 3: Generate Hedra avatar from user image
+			hedra_avatar_result = await self._run_with_retry(
+				task_name="hedra_avatar_generation",
+				task_func=self._generate_hedra_avatar,
+				session_id=session_id,
+				max_retries=3
+			)
+			results["tasks"]["hedra_avatar_generation"] = hedra_avatar_result
 			
 			# Future tasks can be added here
 			# Example:
@@ -181,6 +193,18 @@ class PostCallOrchestrator:
 		"""
 		return self.profile_aggregator.aggregate_user_profile(session_id)
 	
+	def _generate_hedra_avatar(self, session_id: str) -> dict:
+		"""
+		Generate Hedra avatar from user's uploaded image using Hedra API.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			dict: Hedra avatar generation result
+		"""
+		return self.hedra_avatar_generator.generate_avatar(session_id)
+	
 	# Future task methods can be added below:
 	
 	# async def _is_first_call(self, session_id: str) -> bool:
@@ -193,8 +217,5 @@ class PostCallOrchestrator:
 	# 	# Implementation here
 	# 	pass
 	
-	# async def _update_user_profile(self, session_id: str, transcript_analysis: dict) -> dict:
-	# 	"""Update user profile with transcript analysis results"""
-	# 	# Implementation here
-	# 	pass
+
 

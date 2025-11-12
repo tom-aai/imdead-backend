@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+HEDRA_API_KEY = os.getenv("HEDRA_API_KEY")
 
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_SERVICE_KEY:
@@ -38,8 +39,11 @@ else:
 if not ANTHROPIC_API_KEY:
 	logger.error("Anthropic API key not found")
 
+if not HEDRA_API_KEY:
+	logger.warning("Hedra API key not found - avatar generation will be unavailable")
+
 # Initialize services
-post_call_orchestrator = PostCallOrchestrator(supabase, ANTHROPIC_API_KEY)
+post_call_orchestrator = PostCallOrchestrator(supabase, ANTHROPIC_API_KEY, HEDRA_API_KEY)
 
 
 @app.route("/")
