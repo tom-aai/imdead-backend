@@ -31,28 +31,32 @@ class HedraAvatarGenerator:
 		if not self.hedra_api_key:
 			logger.warning("HEDRA_API_KEY not set - avatar generation will fail")
 	
-	def generate_avatar(self, session_id: str) -> dict:
+	def generate_avatar(self, user_id: str, picture_id: str, session_id: str = None) -> dict:
 		"""
 		Generate a Hedra avatar for a user based on their uploaded image.
 		
 		Process:
-		1. Look up picture_id from interview_calls table
-		2. Download image from Supabase avatar-images-bucket
-		3. Upload image to Hedra API
-		4. Store hedra_avatar_id in user_avatar_images table
+		1. Download image from Supabase avatar-images-bucket
+		2. Upload image to Hedra API
+		3. Store hedra_avatar_id in user_avatar_images table
 		
 		Args:
-			session_id: The LiveKit session ID
+			user_id: The user's ID (required)
+			picture_id: The picture ID from avatar-images-bucket (required)
+			session_id: Optional session ID (for call-based route tracking)
 			
 		Returns:
 			dict: Processing result with status and avatar data
 			
 		Raises:
-			ValueError: If session_id is invalid or required data not found
+			ValueError: If required parameters are missing
 			Exception: If processing fails
 		"""
-		if not session_id:
-			raise ValueError("session_id is required")
+		if not user_id:
+			raise ValueError("user_id is required")
+		
+		if not picture_id:
+			raise ValueError("picture_id is required")
 		
 		if not self.supabase:
 			raise Exception("Supabase client not initialized")
@@ -60,43 +64,24 @@ class HedraAvatarGenerator:
 		if not self.hedra_api_key:
 			raise Exception("HEDRA_API_KEY not configured")
 		
-		logger.info(f"Generating Hedra avatar for session {session_id}")
+		logger.info(f"Generating Hedra avatar for user {user_id}, picture {picture_id}")
 		
-		# Step 1: Fetch call data and picture_id from Supabase
-		call_data = self._get_call_data(session_id)
-		picture_id = call_data.get('picture_id')
-		user_id = call_data.get('user_id')
-		user_firstname = call_data.get('user_firstname', '')
-		user_lastname = call_data.get('user_lastname', '')
-		
-		if not picture_id:
-			logger.error(f"No picture_id found for session {session_id}")
-			raise ValueError(f"No picture_id found for session {session_id}")
-		
-		if not user_id:
-			logger.error(f"No user_id found for session {session_id}")
-			raise ValueError(f"No user_id found for session {session_id}")
-		
-		logger.debug(f"Found picture_id: {picture_id} for user {user_id}")
-		
-		# Step 2: Download image from Supabase storage
+		# Step 1: Download image from Supabase storage
 		local_image_path = self._download_image_from_storage(picture_id)
 		
 		try:
-			# Step 3: Upload image to Hedra and get hedra_avatar_id
-			hedra_avatar_id = self._upload_to_hedra(local_image_path, user_firstname, user_lastname)
+			# Step 2: Upload image to Hedra and get hedra_avatar_id
+			hedra_avatar_id = self._upload_to_hedra(local_image_path)
 			
-			# Step 4: Store hedra_avatar_id in user_avatar_images table
+			# Step 3: Store hedra_avatar_id in user_avatar_images table
 			uploaded_record = self._upload_to_supabase(
 				user_id=user_id,
 				session_id=session_id,
 				picture_id=picture_id,
-				hedra_avatar_id=hedra_avatar_id,
-				user_firstname=user_firstname,
-				user_lastname=user_lastname
+				hedra_avatar_id=hedra_avatar_id
 			)
 			
-			logger.info(f"Hedra avatar generation completed for session {session_id} (hedra_avatar_id: {hedra_avatar_id})")
+			logger.info(f"Hedra avatar generation completed for picture {picture_id} (hedra_avatar_id: {hedra_avatar_id})")
 			
 			return {
 				"status": "success",
@@ -116,30 +101,6 @@ class HedraAvatarGenerator:
 					logger.debug(f"Cleaned up temporary file: {local_image_path}")
 				except Exception as e:
 					logger.warning(f"Failed to clean up temporary file {local_image_path}: {e}")
-	
-	def _get_call_data(self, session_id: str) -> dict:
-		"""
-		Fetch call data from interview_calls table.
-		
-		Args:
-			session_id: The LiveKit session ID
-			
-		Returns:
-			dict: Call data record
-			
-		Raises:
-			ValueError: If call not found
-		"""
-		response = self.supabase.table("interview_calls")\
-			.select("session_id, user_id, picture_id, user_firstname, user_lastname, created_at")\
-			.eq("session_id", session_id)\
-			.execute()
-		
-		if not response.data or len(response.data) == 0:
-			logger.error(f"No call found for session_id: {session_id}")
-			raise ValueError(f"Call not found for session_id: {session_id}")
-		
-		return response.data[0]
 	
 	def _download_image_from_storage(self, picture_id: str) -> str:
 		"""
@@ -161,23 +122,22 @@ class HedraAvatarGenerator:
 			response = self.supabase.storage.from_("avatar-images-bucket").download(picture_id)
 			
 			if not response:
-				raise Exception(f"Failed to download image {picture_id} from storage")
+				raise Exception(f"Empty response downloading image {picture_id}")
 			
 			# Save to temporary file
-			# Determine file extension from picture_id
 			file_ext = Path(picture_id).suffix or '.jpg'
 			temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_ext)
 			temp_file.write(response)
 			temp_file.close()
 			
-			logger.debug(f"Image downloaded to temporary file: {temp_file.name}")
+			logger.debug(f"Image downloaded successfully ({len(response)} bytes)")
 			return temp_file.name
 			
 		except Exception as e:
-			logger.error(f"Failed to download image from storage: {e}")
-			raise Exception(f"Image download failed: {e}")
+			logger.error(f"Failed to download image '{picture_id}' from storage: {e}")
+			raise Exception(f"Image download failed for '{picture_id}': {e}")
 	
-	def _upload_to_hedra(self, image_path: str, user_firstname: str, user_lastname: str) -> str:
+	def _upload_to_hedra(self, image_path: str) -> str:
 		"""
 		Upload image to Hedra API and return hedra_avatar_id.
 		
@@ -187,8 +147,6 @@ class HedraAvatarGenerator:
 		
 		Args:
 			image_path: Path to the image file
-			user_firstname: User's first name for naming the avatar
-			user_lastname: User's last name for naming the avatar
 			
 		Returns:
 			str: The Hedra avatar_id (asset ID)
@@ -202,10 +160,8 @@ class HedraAvatarGenerator:
 		}
 		
 		try:
-			# Step 1: Create asset
-			avatar_name = f"{user_firstname}_{user_lastname}_avatar".strip("_")
-			if not avatar_name:
-				avatar_name = "user_avatar"
+			# Step 1: Create asset with generic name
+			avatar_name = "user_avatar"
 			
 			logger.debug(f"Creating Hedra asset with name: {avatar_name}")
 			
@@ -267,42 +223,57 @@ class HedraAvatarGenerator:
 		user_id: str,
 		session_id: str,
 		picture_id: str,
-		hedra_avatar_id: str,
-		user_firstname: str,
-		user_lastname: str
+		hedra_avatar_id: str
 	) -> dict:
 		"""
-		Upload avatar data to user_avatar_images table.
+		Store avatar data in user_avatar_images table.
+		
+		For post-call flow (with session_id): INSERT new row
+		For user upload flow (no session_id): UPDATE existing row
 		
 		Args:
 			user_id: The user's ID
-			session_id: The LiveKit session ID
+			session_id: The LiveKit session ID (optional)
 			picture_id: The picture ID from storage
 			hedra_avatar_id: The Hedra avatar ID
-			user_firstname: User's first name
-			user_lastname: User's last name
 			
 		Returns:
-			dict: The inserted record from Supabase
+			dict: The inserted/updated record from Supabase
 			
 		Raises:
-			Exception: If upload fails
+			Exception: If insert/update fails
 		"""
-		upload_data = {
-			"user_id": user_id,
-			"session_id": session_id,
-			"picture_id": picture_id,
-			"hedra_avatar_id": hedra_avatar_id,
-			"user_firstname": user_firstname,
-			"user_lastname": user_lastname
-		}
-		
-		# Insert into Supabase
-		response = self.supabase.table("user_avatar_images").insert(upload_data).execute()
-		
-		if response.data:
-			logger.debug(f"Uploaded avatar data to database (user: {user_id}, hedra_avatar_id: {hedra_avatar_id})")
-			return response.data[0]
+		if session_id:
+			# Post-call flow: INSERT new row with session_id
+			upload_data = {
+				"user_id": user_id,
+				"picture_id": picture_id,
+				"hedra_avatar_id": hedra_avatar_id,
+				"session_id": session_id
+			}
+			
+			response = self.supabase.table("user_avatar_images").insert(upload_data).execute()
+			
+			if response.data:
+				logger.debug(f"Inserted avatar data in database (user: {user_id}, hedra_avatar_id: {hedra_avatar_id})")
+				return response.data[0]
+			else:
+				raise Exception("Failed to insert avatar data into Supabase")
 		else:
-			raise Exception("Failed to upload avatar data to Supabase")
+			# User upload flow: UPDATE existing row (find by user_id and picture_id)
+			update_data = {
+				"hedra_avatar_id": hedra_avatar_id
+			}
+			
+			response = self.supabase.table("user_avatar_images")\
+				.update(update_data)\
+				.eq("user_id", user_id)\
+				.eq("picture_id", picture_id)\
+				.execute()
+			
+			if response.data:
+				logger.debug(f"Updated avatar data in database (user: {user_id}, hedra_avatar_id: {hedra_avatar_id})")
+				return response.data[0]
+			else:
+				raise Exception(f"Failed to update avatar data for user {user_id}, picture {picture_id}. Row may not exist.")
 

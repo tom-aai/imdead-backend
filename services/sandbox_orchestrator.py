@@ -15,6 +15,7 @@ from supabase import create_client
 # Add parent directory to path to import services
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.post_call_orchestrator import PostCallOrchestrator
+from services.hedra_avatar_generation import HedraAvatarGenerator
 
 # Configure logging
 logging.basicConfig(
@@ -49,40 +50,6 @@ def setup_clients():
     
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
     return supabase, ANTHROPIC_API_KEY, HEDRA_API_KEY
-
-
-def _get_user_id_from_session(supabase, session_id: str) -> str:
-    """
-    Get the user_id associated with a session.
-    
-    Args:
-        supabase: Supabase client
-        session_id: The LiveKit session ID
-        
-    Returns:
-        str: The user_id, or None if not found
-    """
-    # Try interview_call_analysis first (most recent table)
-    response = supabase.table("interview_call_analysis")\
-        .select("user_id")\
-        .eq("session_id", session_id)\
-        .limit(1)\
-        .execute()
-    
-    if response.data and len(response.data) > 0:
-        return response.data[0].get('user_id')
-    
-    # Fallback to interview_calls table
-    response = supabase.table("interview_calls")\
-        .select("user_id")\
-        .eq("session_id", session_id)\
-        .limit(1)\
-        .execute()
-    
-    if response.data and len(response.data) > 0:
-        return response.data[0].get('user_id')
-    
-    return None
 
 
 def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
@@ -198,9 +165,65 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
         sys.exit(1)
 
 
+async def run_direct_avatar_generation(supabase, hedra_key: str, user_id: str, picture_id: str):
+    """Run direct avatar generation (without a session)."""
+    logger.info(f"Running direct avatar generation for user {user_id}, picture {picture_id}")
+    
+    # Initialize avatar generator
+    avatar_generator = HedraAvatarGenerator(supabase, hedra_key)
+    
+    try:
+        result = avatar_generator.generate_avatar(
+            user_id=user_id,
+            picture_id=picture_id
+        )
+        return {
+            "user_id": user_id,
+            "picture_id": picture_id,
+            "status": "success",
+            "result": result
+        }
+    except Exception as e:
+        logger.error(f"Direct avatar generation failed: {e}")
+        return {
+            "user_id": user_id,
+            "picture_id": picture_id,
+            "status": "error",
+            "error": str(e)
+        }
+
+
 def print_results(results: dict):
     """Pretty print the orchestration results in a concise format."""
     print("\n" + "=" * 80)
+    
+    # Check if this is a direct avatar generation result (no tasks field)
+    if "tasks" not in results and "picture_id" in results:
+        print("DIRECT AVATAR GENERATION RESULTS")
+        print("=" * 80)
+        
+        summary = {
+            "user_id": results.get("user_id"),
+            "picture_id": results.get("picture_id"),
+            "status": results.get("status")
+        }
+        
+        if results.get("status") == "success" and "result" in results:
+            result = results["result"]
+            summary["hedra_avatar_id"] = result.get("hedra_avatar_id")
+            summary["record_id"] = result.get("record_id")
+        elif results.get("status") == "error":
+            summary["error"] = results.get("error")
+        
+        print(json.dumps(summary, indent=2, default=str))
+        print("=" * 80 + "\n")
+        
+        if results.get("status") == "success":
+            print("✓ Avatar has been generated and saved to Supabase.")
+            print()
+        return
+    
+    # Regular orchestration results
     print("ORCHESTRATION RESULTS")
     print("=" * 80)
     
@@ -267,8 +290,11 @@ Examples:
   # Run only profile aggregation
   python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task profile_aggregation
   
-  # Run only Hedra avatar generation
+  # Run only Hedra avatar generation (from call)
   python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task hedra_avatar_generation
+  
+  # Run direct avatar generation (without call session)
+  python sandbox_orchestrator.py --user-id abc123 --picture-id profile-pic.jpg
   
   # Run with specific task (explicitly)
   python sandbox_orchestrator.py -s RM_7Vn7ZtZWQxZX -t profile_aggregation
@@ -277,14 +303,26 @@ Examples:
     
     parser.add_argument(
         '--session-id', '-s',
-        required=True,
-        help='LiveKit session ID to process'
+        required=False,
+        help='LiveKit session ID to process (required for session-based operations)'
     )
     
     parser.add_argument(
         '--task', '-t',
         required=False,
         help='Run a specific task only (e.g., transcript_processing). If omitted, runs all tasks.'
+    )
+    
+    parser.add_argument(
+        '--user-id', '-u',
+        required=False,
+        help='User ID for direct avatar generation (use with --picture-id)'
+    )
+    
+    parser.add_argument(
+        '--picture-id', '-p',
+        required=False,
+        help='Picture ID for direct avatar generation (use with --user-id)'
     )
     
     args = parser.parse_args()
@@ -294,24 +332,42 @@ Examples:
         logger.info("Initializing clients...")
         supabase, anthropic_key, hedra_key = setup_clients()
         
-        # Initialize orchestrator with production services
-        orchestrator = PostCallOrchestrator(supabase, anthropic_key, hedra_key)
-        
-        # Run orchestration based on arguments
-        if args.task:
-            results = await run_single_task(orchestrator, args.session_id, args.task, supabase)
+        # Check if this is a direct avatar generation request
+        if args.user_id or args.picture_id:
+            # Direct avatar generation mode
+            if not args.user_id or not args.picture_id:
+                logger.error("Both --user-id and --picture-id are required for direct avatar generation")
+                sys.exit(1)
+            
+            if args.session_id or args.task:
+                logger.error("Cannot use --session-id or --task with direct avatar generation (--user-id/--picture-id)")
+                sys.exit(1)
+            
+            results = await run_direct_avatar_generation(supabase, hedra_key, args.user_id, args.picture_id)
         else:
-            results = await run_full_orchestration(orchestrator, args.session_id, supabase)
+            # Session-based orchestration mode
+            if not args.session_id:
+                logger.error("Either --session-id (for session-based tasks) or --user-id/--picture-id (for direct avatar generation) is required")
+                sys.exit(1)
+            
+            # Initialize orchestrator with production services
+            orchestrator = PostCallOrchestrator(supabase, anthropic_key, hedra_key)
+            
+            # Run orchestration based on arguments
+            if args.task:
+                results = await run_single_task(orchestrator, args.session_id, args.task, supabase)
+            else:
+                results = await run_full_orchestration(orchestrator, args.session_id, supabase)
         
         # Display results
         print_results(results)
         
         # Exit with appropriate status code
         if results.get("status") == "success":
-            logger.info("Orchestration completed successfully")
+            logger.info("Operation completed successfully")
             sys.exit(0)
         else:
-            logger.error("Orchestration completed with errors")
+            logger.error("Operation completed with errors")
             sys.exit(1)
             
     except KeyboardInterrupt:

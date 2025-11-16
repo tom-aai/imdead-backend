@@ -193,6 +193,35 @@ class PostCallOrchestrator:
 		"""
 		return self.profile_aggregator.aggregate_user_profile(session_id)
 	
+	def _get_picture_and_user_from_session(self, session_id: str) -> tuple[Optional[str], Optional[str]]:
+		"""
+		Look up the picture_id and user_id associated with a session.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			tuple: (picture_id, user_id) or (None, None) if not found
+		"""
+		try:
+			response = self.supabase.table("interview_calls")\
+				.select("picture_id, user_id")\
+				.eq("session_id", session_id)\
+				.limit(1)\
+				.execute()
+			
+			if response.data and len(response.data) > 0:
+				picture_id = response.data[0].get('picture_id')
+				user_id = response.data[0].get('user_id')
+				return (picture_id, user_id)
+			
+			logger.warning(f"No picture_id/user_id found for session {session_id}")
+			return (None, None)
+			
+		except Exception as e:
+			logger.error(f"Failed to fetch picture_id/user_id for session {session_id}: {e}")
+			return (None, None)
+	
 	def _generate_hedra_avatar(self, session_id: str) -> dict:
 		"""
 		Generate Hedra avatar from user's uploaded image using Hedra API.
@@ -203,7 +232,20 @@ class PostCallOrchestrator:
 		Returns:
 			dict: Hedra avatar generation result
 		"""
-		return self.hedra_avatar_generator.generate_avatar(session_id)
+		# Look up the picture_id and user_id from the session
+		picture_id, user_id = self._get_picture_and_user_from_session(session_id)
+		
+		if not picture_id:
+			raise ValueError(f"No picture_id found for session {session_id}")
+		
+		if not user_id:
+			raise ValueError(f"No user_id found for session {session_id}")
+		
+		return self.hedra_avatar_generator.generate_avatar(
+			user_id=user_id,
+			picture_id=picture_id,
+			session_id=session_id
+		)
 	
 	# Future task methods can be added below:
 	
