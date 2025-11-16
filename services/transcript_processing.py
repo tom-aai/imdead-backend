@@ -218,7 +218,7 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 			"hot_take_2": analysis_data.get("hot_take_2"),
 			"social_post_draft": analysis_data.get("social_post_draft"),
 			# Nullable fields (will be populated by future tasks)
-			"avatar_chat_prompt": None,
+			"hedra_avatar_id": None,
 			"hot_take_video_1": None,
 			"hot_take_video_2": None
 		}

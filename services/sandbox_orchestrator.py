@@ -165,9 +165,9 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
         sys.exit(1)
 
 
-async def run_direct_avatar_generation(supabase, hedra_key: str, user_id: str, picture_id: str):
-    """Run direct avatar generation (without a session)."""
-    logger.info(f"Running direct avatar generation for user {user_id}, picture {picture_id}")
+async def run_direct_avatar_generation(supabase, hedra_key: str, user_id: str, picture_id: str, session_id: str):
+    """Run direct avatar generation (e.g., user uploads avatar from profile page)."""
+    logger.info(f"Running direct avatar generation for user {user_id}, picture {picture_id}, session {session_id}")
     
     # Initialize avatar generator
     avatar_generator = HedraAvatarGenerator(supabase, hedra_key)
@@ -175,11 +175,13 @@ async def run_direct_avatar_generation(supabase, hedra_key: str, user_id: str, p
     try:
         result = avatar_generator.generate_avatar(
             user_id=user_id,
-            picture_id=picture_id
+            picture_id=picture_id,
+            session_id=session_id
         )
         return {
             "user_id": user_id,
             "picture_id": picture_id,
+            "session_id": session_id,
             "status": "success",
             "result": result
         }
@@ -188,6 +190,7 @@ async def run_direct_avatar_generation(supabase, hedra_key: str, user_id: str, p
         return {
             "user_id": user_id,
             "picture_id": picture_id,
+            "session_id": session_id,
             "status": "error",
             "error": str(e)
         }
@@ -205,6 +208,7 @@ def print_results(results: dict):
         summary = {
             "user_id": results.get("user_id"),
             "picture_id": results.get("picture_id"),
+            "session_id": results.get("session_id"),
             "status": results.get("status")
         }
         
@@ -293,8 +297,8 @@ Examples:
   # Run only Hedra avatar generation (from call)
   python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task hedra_avatar_generation
   
-  # Run direct avatar generation (without call session)
-  python sandbox_orchestrator.py --user-id abc123 --picture-id profile-pic.jpg
+  # Run direct avatar generation (e.g., user uploads from profile)
+  python sandbox_orchestrator.py --user-id abc123 --picture-id profile-pic.jpg --session-id RM_7Vn7ZtZWQxZX
   
   # Run with specific task (explicitly)
   python sandbox_orchestrator.py -s RM_7Vn7ZtZWQxZX -t profile_aggregation
@@ -304,7 +308,7 @@ Examples:
     parser.add_argument(
         '--session-id', '-s',
         required=False,
-        help='LiveKit session ID to process (required for session-based operations)'
+        help='LiveKit session ID (required for all operations)'
     )
     
     parser.add_argument(
@@ -335,19 +339,19 @@ Examples:
         # Check if this is a direct avatar generation request
         if args.user_id or args.picture_id:
             # Direct avatar generation mode
-            if not args.user_id or not args.picture_id:
-                logger.error("Both --user-id and --picture-id are required for direct avatar generation")
+            if not args.user_id or not args.picture_id or not args.session_id:
+                logger.error("All of --user-id, --picture-id, and --session-id are required for direct avatar generation")
                 sys.exit(1)
             
-            if args.session_id or args.task:
-                logger.error("Cannot use --session-id or --task with direct avatar generation (--user-id/--picture-id)")
+            if args.task:
+                logger.error("Cannot use --task with direct avatar generation (--user-id/--picture-id/--session-id)")
                 sys.exit(1)
             
-            results = await run_direct_avatar_generation(supabase, hedra_key, args.user_id, args.picture_id)
+            results = await run_direct_avatar_generation(supabase, hedra_key, args.user_id, args.picture_id, args.session_id)
         else:
             # Session-based orchestration mode
             if not args.session_id:
-                logger.error("Either --session-id (for session-based tasks) or --user-id/--picture-id (for direct avatar generation) is required")
+                logger.error("--session-id is required for all operations")
                 sys.exit(1)
             
             # Initialize orchestrator with production services

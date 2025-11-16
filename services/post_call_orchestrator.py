@@ -226,6 +226,9 @@ class PostCallOrchestrator:
 		"""
 		Generate Hedra avatar from user's uploaded image using Hedra API.
 		
+		The HedraAvatarGenerator will automatically update interview_call_analysis
+		when session_id is provided.
+		
 		Args:
 			session_id: The LiveKit session ID
 			
@@ -241,6 +244,7 @@ class PostCallOrchestrator:
 		if not user_id:
 			raise ValueError(f"No user_id found for session {session_id}")
 		
+		# Generate the Hedra avatar (will also update interview_call_analysis)
 		return self.hedra_avatar_generator.generate_avatar(
 			user_id=user_id,
 			picture_id=picture_id,

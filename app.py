@@ -114,15 +114,21 @@ def post_call_orchestrator_endpoint():
 		return jsonify({"error": str(e)}), 500
 
 
-def _run_avatar_generation_in_background(user_id: str, picture_id: str):
+def _run_avatar_generation_in_background(user_id: str, picture_id: str, session_id: str):
 	"""
 	Run avatar generation in a background thread.
 	This allows the endpoint to return immediately while processing continues.
+	
+	Args:
+		user_id: The user's ID (required)
+		picture_id: The picture ID from storage (required)
+		session_id: The LiveKit session ID (required)
 	"""
 	try:
 		result = hedra_avatar_generator.generate_avatar(
 			user_id=user_id,
-			picture_id=picture_id
+			picture_id=picture_id,
+			session_id=session_id
 		)
 		if result.get("status") == "error":
 			logger.error(f"Background avatar generation failed for user {user_id}, picture {picture_id}: {result.get('error')}")
@@ -140,13 +146,18 @@ def upload_avatar_image_endpoint():
 	
 	Required fields:
 	- user_id: The user's ID
+	- session_id: The LiveKit session ID (needed to update interview_call_analysis)
 	- file: The image file (multipart/form-data)
 	
 	Process:
 	1. Upload image to Supabase storage
-	2. Create initial database record in user_avatar_images
+	2. Create initial database record in user_avatar_images (without session_id for user uploads)
 	3. Trigger Hedra avatar generation in background
-	4. Return immediately
+	4. Update interview_call_analysis with hedra_avatar_id when complete
+	5. Return immediately
+	
+	Note: For user uploads, session_id is NOT stored in user_avatar_images table,
+	      so you can identify which images came from the interview call flow.
 	
 	Returns:
 	- status: "processing"
@@ -154,11 +165,15 @@ def upload_avatar_image_endpoint():
 	- record_id: The ID of the created record in user_avatar_images table
 	"""
 	try:
-		# Get user_id from form data
+		# Get user_id and session_id from form data
 		user_id = request.form.get("user_id")
+		session_id = request.form.get("session_id")
 		
 		if not user_id:
 			return jsonify({"error": "user_id is required"}), 400
+		
+		if not session_id:
+			return jsonify({"error": "session_id is required"}), 400
 		
 		# Get the uploaded file
 		if 'file' not in request.files:
@@ -192,7 +207,8 @@ def upload_avatar_image_endpoint():
 		# Create initial record in user_avatar_images table (without hedra_avatar_id)
 		upload_data = {
 			"user_id": user_id,
-			"picture_id": picture_id
+			"picture_id": picture_id,
+			"picture_source": "user_upload"
 		}
 		
 		response = supabase.table("user_avatar_images").insert(upload_data).execute()
@@ -207,18 +223,19 @@ def upload_avatar_image_endpoint():
 		# Start avatar generation in background thread
 		thread = threading.Thread(
 			target=_run_avatar_generation_in_background,
-			args=(user_id, picture_id),
+			args=(user_id, picture_id, session_id),
 			daemon=True
 		)
 		thread.start()
 		
-		logger.info(f"Avatar generation started in background for user {user_id}, picture {picture_id}")
+		logger.info(f"Avatar generation started in background for user {user_id}, picture {picture_id}, session {session_id}")
 		
 		# Return immediately
 		return jsonify({
 			"status": "processing",
 			"message": "Image uploaded successfully, avatar generation started in background",
 			"user_id": user_id,
+			"session_id": session_id,
 			"picture_id": picture_id,
 			"record_id": record_id
 		}), 200
@@ -239,14 +256,16 @@ def generate_avatar_endpoint():
 	Required fields:
 	- user_id: The user's ID
 	- picture_id: The picture ID from avatar-images-bucket in Supabase storage
+	- session_id: The LiveKit session ID
 	
-	Note: This will UPDATE the existing row in user_avatar_images (not create a new one).
+	Note: This will UPDATE the existing rows in user_avatar_images and interview_call_analysis.
 	"""
 	try:
-		# Get user_id and picture_id from request
+		# Get user_id, picture_id, and session_id from request
 		data = request.get_json()
 		user_id = data.get("user_id")
 		picture_id = data.get("picture_id")
+		session_id = data.get("session_id")
 		
 		if not user_id:
 			return jsonify({"error": "user_id is required"}), 400
@@ -254,22 +273,26 @@ def generate_avatar_endpoint():
 		if not picture_id:
 			return jsonify({"error": "picture_id is required"}), 400
 		
+		if not session_id:
+			return jsonify({"error": "session_id is required"}), 400
+		
 		# Start avatar generation in background thread
 		thread = threading.Thread(
 			target=_run_avatar_generation_in_background,
-			args=(user_id, picture_id),
+			args=(user_id, picture_id, session_id),
 			daemon=True
 		)
 		thread.start()
 		
-		logger.info(f"Avatar regeneration started for user {user_id}, picture {picture_id}")
+		logger.info(f"Avatar regeneration started for user {user_id}, picture {picture_id}, session {session_id}")
 		
 		# Return immediately
 		return jsonify({
 			"status": "processing",
 			"message": "Avatar generation started in background",
 			"user_id": user_id,
-			"picture_id": picture_id
+			"picture_id": picture_id,
+			"session_id": session_id
 		}), 200
 		
 	except Exception as e:

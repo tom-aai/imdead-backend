@@ -31,19 +31,20 @@ class HedraAvatarGenerator:
 		if not self.hedra_api_key:
 			logger.warning("HEDRA_API_KEY not set - avatar generation will fail")
 	
-	def generate_avatar(self, user_id: str, picture_id: str, session_id: str = None) -> dict:
+	def generate_avatar(self, user_id: str, picture_id: str, session_id: str) -> dict:
 		"""
 		Generate a Hedra avatar for a user based on their uploaded image.
 		
 		Process:
 		1. Download image from Supabase avatar-images-bucket
 		2. Upload image to Hedra API
-		3. Store hedra_avatar_id in user_avatar_images table
+		3. Update user_avatar_images table with hedra_avatar_id
+		4. Update interview_call_analysis table with hedra_avatar_id
 		
 		Args:
-			user_id: The user's ID (required)
-			picture_id: The picture ID from avatar-images-bucket (required)
-			session_id: Optional session ID (for call-based route tracking)
+			user_id: The user's ID
+			picture_id: The picture ID from avatar-images-bucket
+			session_id: The LiveKit session ID
 			
 		Returns:
 			dict: Processing result with status and avatar data
@@ -57,6 +58,9 @@ class HedraAvatarGenerator:
 		
 		if not picture_id:
 			raise ValueError("picture_id is required")
+		
+		if not session_id:
+			raise ValueError("session_id is required")
 		
 		if not self.supabase:
 			raise Exception("Supabase client not initialized")
@@ -73,11 +77,17 @@ class HedraAvatarGenerator:
 			# Step 2: Upload image to Hedra and get hedra_avatar_id
 			hedra_avatar_id = self._upload_to_hedra(local_image_path)
 			
-			# Step 3: Store hedra_avatar_id in user_avatar_images table
-			uploaded_record = self._upload_to_supabase(
+			# Step 3: Update user_avatar_images table with hedra_avatar_id
+			uploaded_record = self._update_user_avatar_images(
 				user_id=user_id,
 				session_id=session_id,
 				picture_id=picture_id,
+				hedra_avatar_id=hedra_avatar_id
+			)
+			
+			# Step 4: Update interview_call_analysis table with hedra_avatar_id
+			self._update_interview_analysis(
+				session_id=session_id,
 				hedra_avatar_id=hedra_avatar_id
 			)
 			
@@ -218,7 +228,7 @@ class HedraAvatarGenerator:
 			logger.error(f"Failed to upload to Hedra: {e}")
 			raise
 	
-	def _upload_to_supabase(
+	def _update_user_avatar_images(
 		self,
 		user_id: str,
 		session_id: str,
@@ -226,54 +236,88 @@ class HedraAvatarGenerator:
 		hedra_avatar_id: str
 	) -> dict:
 		"""
-		Store avatar data in user_avatar_images table.
+		Update user_avatar_images table with hedra_avatar_id.
 		
-		For post-call flow (with session_id): INSERT new row
-		For user upload flow (no session_id): UPDATE existing row
+		Both flows UPDATE the existing record that was created earlier:
+		- Post-call flow: Agent created initial record, we update with hedra_avatar_id and session_id
+		- User upload flow: Upload endpoint created initial record, we update with hedra_avatar_id only (no session_id)
+		
+		The session_id is only set in user_avatar_images for images that come from the interview call flow
+		(i.e., picture_source != "user_upload"). This allows tracking which session each image came from.
 		
 		Args:
 			user_id: The user's ID
-			session_id: The LiveKit session ID (optional)
+			session_id: The LiveKit session ID (needed for interview_call_analysis but not always for user_avatar_images)
 			picture_id: The picture ID from storage
 			hedra_avatar_id: The Hedra avatar ID
 			
 		Returns:
-			dict: The inserted/updated record from Supabase
+			dict: The updated record from Supabase
 			
 		Raises:
-			Exception: If insert/update fails
+			Exception: If update fails
 		"""
-		if session_id:
-			# Post-call flow: INSERT new row with session_id
-			upload_data = {
-				"user_id": user_id,
-				"picture_id": picture_id,
-				"hedra_avatar_id": hedra_avatar_id,
-				"session_id": session_id
-			}
-			
-			response = self.supabase.table("user_avatar_images").insert(upload_data).execute()
-			
-			if response.data:
-				logger.debug(f"Inserted avatar data in database (user: {user_id}, hedra_avatar_id: {hedra_avatar_id})")
-				return response.data[0]
-			else:
-				raise Exception("Failed to insert avatar data into Supabase")
+		# First, get the existing record to check the picture_source
+		existing_record_response = self.supabase.table("user_avatar_images")\
+			.select("picture_source")\
+			.eq("user_id", user_id)\
+			.eq("picture_id", picture_id)\
+			.execute()
+		
+		if not existing_record_response.data:
+			raise Exception(f"No existing record found in user_avatar_images for user {user_id}, picture {picture_id}")
+		
+		picture_source = existing_record_response.data[0].get("picture_source")
+		
+		# Prepare update data with hedra_avatar_id
+		update_data = {
+			"hedra_avatar_id": hedra_avatar_id
+		}
+		
+		# Only include session_id if this image came from the interview call flow
+		# (i.e., picture_source is explicitly "from_interview_session" or similar, NOT "user_upload" or NULL)
+		if picture_source and picture_source == "from_interview_session":
+			update_data["session_id"] = session_id
+			logger.debug(f"Image from interview call flow (source: {picture_source}) - will set session_id in user_avatar_images")
 		else:
-			# User upload flow: UPDATE existing row (find by user_id and picture_id)
-			update_data = {
-				"hedra_avatar_id": hedra_avatar_id
-			}
+			logger.debug(f"Image from user upload or unknown source (source: {picture_source}) - will NOT set session_id in user_avatar_images")
+		
+		# Update existing row (find by user_id and picture_id)
+		response = self.supabase.table("user_avatar_images")\
+			.update(update_data)\
+			.eq("user_id", user_id)\
+			.eq("picture_id", picture_id)\
+			.execute()
+		
+		if response.data:
+			session_info = f", session: {session_id}" if (picture_source and picture_source == "from_interview_session") else " (no session_id - user upload or unknown source)"
+			logger.debug(f"Updated user_avatar_images table (user: {user_id}{session_info}, hedra_avatar_id: {hedra_avatar_id})")
+			return response.data[0]
+		else:
+			raise Exception(f"Failed to update user_avatar_images for user {user_id}, picture {picture_id}. Row may not exist.")
+	
+	def _update_interview_analysis(self, session_id: str, hedra_avatar_id: str) -> dict:
+		"""
+		Update interview_call_analysis table with hedra_avatar_id.
+		
+		Args:
+			session_id: The LiveKit session ID
+			hedra_avatar_id: The Hedra avatar ID
 			
-			response = self.supabase.table("user_avatar_images")\
-				.update(update_data)\
-				.eq("user_id", user_id)\
-				.eq("picture_id", picture_id)\
-				.execute()
+		Returns:
+			dict: The updated record from Supabase
 			
-			if response.data:
-				logger.debug(f"Updated avatar data in database (user: {user_id}, hedra_avatar_id: {hedra_avatar_id})")
-				return response.data[0]
-			else:
-				raise Exception(f"Failed to update avatar data for user {user_id}, picture {picture_id}. Row may not exist.")
+		Raises:
+			Exception: If update fails
+		"""
+		response = self.supabase.table("interview_call_analysis")\
+			.update({"hedra_avatar_id": hedra_avatar_id})\
+			.eq("session_id", session_id)\
+			.execute()
+		
+		if response.data:
+			logger.debug(f"Updated interview_call_analysis table with hedra_avatar_id: {hedra_avatar_id} for session {session_id}")
+			return response.data[0]
+		else:
+			raise Exception(f"Failed to update interview_call_analysis for session {session_id}. Row may not exist.")
 
