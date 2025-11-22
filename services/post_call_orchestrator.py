@@ -226,8 +226,7 @@ class PostCallOrchestrator:
 		"""
 		Generate Hedra avatar from user's uploaded image using Hedra API.
 		
-		The HedraAvatarGenerator will automatically update interview_call_analysis
-		when session_id is provided.
+		The HedraAvatarGenerator will automatically update interview_call_analysis.
 		
 		Args:
 			session_id: The LiveKit session ID
