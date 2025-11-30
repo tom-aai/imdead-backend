@@ -57,13 +57,26 @@ class VoiceCloningService:
 		
 		logger.info(f"Processing voice recording for session {session_id}")
 		
-		# Step 1: Get recording_id from interview_calls table
-		recording_id = self._get_recording_info(session_id)
+		# Step 1: Get recording_id and call_type from interview_calls table
+		recording_id, call_type = self._get_recording_info(session_id)
 		
 		if not recording_id:
 			raise ValueError(f"No recording_id found for session {session_id}")
 		
-		logger.debug(f"Found recording_id: {recording_id}")
+		logger.debug(f"Found recording_id: {recording_id}, call_type: {call_type}")
+		
+		# Check if this is an onboarding call - only clone voices for onboarding
+		if call_type != "onboarding":
+			logger.info(f"⏭️  Skipping voice cloning for call_type '{call_type}' - only onboarding calls require voice cloning")
+			return {
+				"status": "skipped",
+				"message": f"Voice cloning skipped for {call_type} call",
+				"session_id": session_id,
+				"recording_id": recording_id,
+				"call_type": call_type
+			}
+		
+		logger.info(f"✅ Onboarding call detected - proceeding with voice cloning")
 		
 		# Step 2: Download recording from Supabase storage
 		local_recording_path = self._download_recording(recording_id)
@@ -89,7 +102,7 @@ class VoiceCloningService:
 			# Step 6: Update user_profiles table with voice_id
 			self._update_user_profile_voice_id(user_id, voice_id)
 			
-			logger.info(f"Updated user_profiles with voice_id for user {user_id}")
+			logger.info(f"✅ Updated user_profiles with voice_id for user {user_id}")
 			
 			return {
 				"status": "success",
@@ -117,22 +130,22 @@ class VoiceCloningService:
 				except Exception as e:
 					logger.warning(f"Failed to clean up processed file {processed_path}: {e}")
 	
-	def _get_recording_info(self, session_id: str) -> str:
+	def _get_recording_info(self, session_id: str) -> tuple[str, str]:
 		"""
-		Get recording_id from interview_calls table.
+		Get recording_id and call_type from interview_calls table.
 		
 		Args:
 			session_id: The LiveKit session ID
 			
 		Returns:
-			str: recording_id
+			tuple[str, str]: (recording_id, call_type)
 			
 		Raises:
 			ValueError: If session not found
 		"""
 		try:
 			response = self.supabase.table("interview_calls")\
-				.select("recording_id")\
+				.select("recording_id, call_type")\
 				.eq("session_id", session_id)\
 				.limit(1)\
 				.execute()
@@ -142,8 +155,9 @@ class VoiceCloningService:
 			
 			call_data = response.data[0]
 			recording_id = call_data.get('recording_id')
+			call_type = call_data.get('call_type', 'interview')  # Default to 'interview' for backward compatibility
 			
-			return recording_id
+			return recording_id, call_type
 			
 		except Exception as e:
 			logger.error(f"Failed to fetch recording info for session {session_id}: {e}")
