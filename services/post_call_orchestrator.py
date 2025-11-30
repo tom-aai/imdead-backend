@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional
 from services.transcript_processing import TranscriptProcessor
 from services.profile_aggregation import ProfileAggregator
 from services.hedra_avatar_generation import HedraAvatarGenerator
+from services.clone_voice import VoiceCloningService
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class PostCallOrchestrator:
 	Handles task execution, retries, and error management.
 	"""
 	
-	def __init__(self, supabase_client, anthropic_api_key: str = None, hedra_api_key: str = None):
+	def __init__(self, supabase_client, anthropic_api_key: str = None, hedra_api_key: str = None, cartesia_api_key: str = None):
 		"""
 		Initialize the post-call orchestrator.
 		
@@ -28,11 +29,13 @@ class PostCallOrchestrator:
 			supabase_client: Initialized Supabase client
 			anthropic_api_key: Anthropic API key (optional, will use env var if not provided)
 			hedra_api_key: Hedra API key (optional, will use env var if not provided)
+			cartesia_api_key: Cartesia API key (optional, will use env var if not provided)
 		"""
 		self.supabase = supabase_client
 		self.transcript_processor = TranscriptProcessor(supabase_client, anthropic_api_key)
 		self.profile_aggregator = ProfileAggregator(supabase_client, anthropic_api_key)
 		self.hedra_avatar_generator = HedraAvatarGenerator(supabase_client, hedra_api_key)
+		self.voice_cloning_service = VoiceCloningService(supabase_client, cartesia_api_key)
 	
 	async def process_call_completion(self, session_id: str) -> Dict[str, Any]:
 		"""
@@ -42,9 +45,9 @@ class PostCallOrchestrator:
 		- Transcript processing and analysis
 		- User profile aggregation
 		- Hedra avatar generation from user image
+		- Voice recording processing for voice cloning
 		
 		Future tasks can be added here:
-		- Voice cloning (for first-time users)
 		- Hot take video generation
 		
 		Args:
@@ -89,15 +92,23 @@ class PostCallOrchestrator:
 			)
 			results["tasks"]["hedra_avatar_generation"] = hedra_avatar_result
 			
+			# Task 4: Process voice recording for cloning
+			voice_cloning_result = await self._run_with_retry(
+				task_name="voice_cloning",
+				task_func=self._process_voice_recording,
+				session_id=session_id,
+				max_retries=3
+			)
+			results["tasks"]["voice_cloning"] = voice_cloning_result
+			
 			# Future tasks can be added here
 			# Example:
-			# if await self._is_first_call(session_id):
-			#     voice_result = await self._run_with_retry(
-			#         task_name="voice_cloning",
-			#         task_func=self._clone_voice,
-			#         session_id=session_id
-			#     )
-			#     results["tasks"]["voice_cloning"] = voice_result
+			# hot_take_result = await self._run_with_retry(
+			#     task_name="hot_take_generation",
+			#     task_func=self._generate_hot_take,
+			#     session_id=session_id
+			# )
+			# results["tasks"]["hot_take_generation"] = hot_take_result
 			
 			logger.info(f"Post-call orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
 			
@@ -250,6 +261,21 @@ class PostCallOrchestrator:
 			session_id=session_id
 		)
 	
+	def _process_voice_recording(self, session_id: str) -> dict:
+		"""
+		Process voice recording for voice cloning.
+		
+		Downloads the recording from Supabase storage, processes it using VAD
+		to remove silence, and saves the processed audio file.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			dict: Voice processing result
+		"""
+		return self.voice_cloning_service.process_voice_recording(session_id)
+	
 	# Future task methods can be added below:
 	
 	# async def _is_first_call(self, session_id: str) -> bool:
@@ -257,8 +283,8 @@ class PostCallOrchestrator:
 	# 	# Implementation here
 	# 	pass
 	
-	# async def _clone_voice(self, session_id: str) -> dict:
-	# 	"""Clone user's voice from the call audio"""
+	# async def _generate_hot_take(self, session_id: str) -> dict:
+	# 	"""Generate hot take video from interview analysis"""
 	# 	# Implementation here
 	# 	pass
 	

@@ -13,4 +13,5 @@ dependencies = [
     "pydub>=0.25.1",
     "numpy>=1.24.0",
     "audioop-lts>=0.2.1",
+    "cartesia>=1.0.0",
 ]

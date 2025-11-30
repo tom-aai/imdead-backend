@@ -1,208 +1,519 @@
 """
-Audio processing script that converts MP4 to MP3, detects speech segments using Silero VAD,
-and removes silence while preserving natural pauses between speech segments.
+Voice cloning service.
 """
 
+import os
+import logging
+import tempfile
 import torch
 from pydub import AudioSegment
 import numpy as np
-from pathlib import Path
+from cartesia import Cartesia
 
-# ============= CONFIGURATION =============
-# Specify your input and output file paths here
-INPUT_FILE_PATH = "/Users/tom/Downloads/voice_assistant_room_3111.mp4"  # Can be .mp4 or .mp3
-OUTPUT_FILE_PATH = "/Users/tom/Downloads/voice_assistant_room_3111.mp3"
-
-# Audio processing parameters
-BUFFER_BETWEEN_SEGMENTS_MS = 250  # Pause duration between speech segments (in milliseconds)
-SAMPLE_RATE = 16000  # Silero VAD works best at 16kHz
-SILENCE_THRESHOLD_DB = -40  # dB threshold for silence detection
-MIN_SILENCE_LENGTH_MS = 500  # Minimum silence length to be considered a gap
-# =========================================
+logger = logging.getLogger(__name__)
 
 
-def convert_to_mp3(input_path: str) -> AudioSegment:
-    """
-    Load audio file and convert to MP3 format if needed.
-    
-    Args:
-        input_path: Path to input audio file (MP4, MP3, WAV, etc.)
-        
-    Returns:
-        AudioSegment object
-    """
-    print(f"Loading audio from: {input_path}")
-    audio = AudioSegment.from_file(input_path)
-    print(f"Audio loaded: {len(audio)}ms, {audio.frame_rate}Hz, {audio.channels} channel(s)")
-    return audio
-
-
-def get_speech_segments_silero(audio: AudioSegment) -> list[tuple[int, int]]:
-    """
-    Use Silero VAD to detect speech segments in the audio.
-    
-    Args:
-        audio: AudioSegment object
-        
-    Returns:
-        List of (start_ms, end_ms) tuples indicating speech segments
-    """
-    print("Detecting speech segments using Silero VAD...")
-    
-    # Load Silero VAD model
-    model, utils = torch.hub.load(
-        repo_or_dir='snakers4/silero-vad',
-        model='silero_vad',
-        force_reload=False,
-        onnx=False
-    )
-    
-    (get_speech_timestamps, _, read_audio, *_) = utils
-    
-    # Convert audio to the right format for Silero
-    # Silero expects 16kHz mono audio
-    audio_16k = audio.set_frame_rate(SAMPLE_RATE).set_channels(1)
-    
-    # Convert to numpy array
-    samples = np.array(audio_16k.get_array_of_samples()).astype(np.float32)
-    
-    # Normalize to [-1, 1]
-    if audio_16k.sample_width == 2:  # 16-bit audio
-        samples = samples / 32768.0
-    elif audio_16k.sample_width == 4:  # 32-bit audio
-        samples = samples / 2147483648.0
-    
-    # Convert to torch tensor
-    audio_tensor = torch.from_numpy(samples)
-    
-    # Get speech timestamps
-    speech_timestamps = get_speech_timestamps(
-        audio_tensor,
-        model,
-        sampling_rate=SAMPLE_RATE,
-        threshold=0.5,  # Speech probability threshold
-        min_speech_duration_ms=100,  # Minimum speech duration
-        min_silence_duration_ms=MIN_SILENCE_LENGTH_MS,  # Minimum silence between speech
-        window_size_samples=512,
-    )
-    
-    # Convert sample indices to milliseconds (relative to original audio)
-    segments = []
-    original_rate = audio.frame_rate
-    
-    for timestamp in speech_timestamps:
-        start_sample = timestamp['start']
-        end_sample = timestamp['end']
-        
-        # Convert from 16kHz samples to milliseconds in original audio
-        start_ms = int((start_sample / SAMPLE_RATE) * 1000)
-        end_ms = int((end_sample / SAMPLE_RATE) * 1000)
-        
-        segments.append((start_ms, end_ms))
-    
-    print(f"Found {len(segments)} speech segments")
-    return segments
-
-
-def stitch_audio_segments(
-    audio: AudioSegment,
-    segments: list[tuple[int, int]],
-    buffer_ms: int
-) -> AudioSegment:
-    """
-    Extract speech segments and stitch them together with buffers.
-    
-    Args:
-        audio: Original AudioSegment
-        segments: List of (start_ms, end_ms) tuples
-        buffer_ms: Buffer duration to add between segments
-        
-    Returns:
-        Stitched AudioSegment
-    """
-    print(f"Stitching {len(segments)} segments with {buffer_ms}ms buffers...")
-    
-    if not segments:
-        print("Warning: No speech segments found!")
-        return audio
-    
-    # Create silence buffer
-    silence_buffer = AudioSegment.silent(duration=buffer_ms, frame_rate=audio.frame_rate)
-    
-    # Extract and concatenate segments
-    result = None
-    
-    for i, (start_ms, end_ms) in enumerate(segments):
-        segment = audio[start_ms:end_ms]
-        
-        if result is None:
-            result = segment
-        else:
-            # Add buffer between segments
-            result = result + silence_buffer + segment
-        
-        duration = end_ms - start_ms
-        print(f"  Segment {i+1}: {start_ms}ms - {end_ms}ms ({duration}ms)")
-    
-    return result
-
-
-def process_audio(input_path: str, output_path: str, buffer_ms: int = 250):
-    """
-    Main processing function that orchestrates the entire workflow.
-    
-    Args:
-        input_path: Path to input audio file
-        output_path: Path to save processed audio
-        buffer_ms: Buffer duration between speech segments
-    """
-    # Validate paths
-    input_file = Path(input_path)
-    if not input_file.exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-    
-    output_file = Path(output_path)
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Step 1: Load and convert audio
-    audio = convert_to_mp3(input_path)
-    
-    # Step 2: Detect speech segments using Silero VAD
-    speech_segments = get_speech_segments_silero(audio)
-    
-    # Step 3: Stitch segments together
-    processed_audio = stitch_audio_segments(audio, speech_segments, buffer_ms)
-    
-    # Step 4: Export as MP3
-    print(f"\nExporting to: {output_path}")
-    processed_audio.export(
-        output_path,
-        format="mp3",
-        bitrate="192k",
-        parameters=["-q:a", "0"]  # Highest quality MP3
-    )
-    
-    print("✓ Processing complete!")
-
-
-if __name__ == "__main__":
-    # Validate configuration
-    if INPUT_FILE_PATH == "path/to/your/input.mp4":
-        print("ERROR: Please set INPUT_FILE_PATH at the top of this script")
-        exit(1)
-    
-    if OUTPUT_FILE_PATH == "path/to/your/output.mp3":
-        print("ERROR: Please set OUTPUT_FILE_PATH at the top of this script")
-        exit(1)
-    
-    # Run the processing
-    try:
-        process_audio(
-            INPUT_FILE_PATH,
-            OUTPUT_FILE_PATH,
-            BUFFER_BETWEEN_SEGMENTS_MS
-        )
-    except Exception as e:
-        print(f"\n❌ Error during processing: {e}")
-        raise
-
+class VoiceCloningService:
+	"""Service for processing voice recordings for cloning."""
+	
+	def __init__(self, supabase_client, cartesia_api_key: str = None):
+		"""
+		Initialize the voice cloning service.
+		
+		Args:
+			supabase_client: Initialized Supabase client
+			cartesia_api_key: Cartesia API key (optional, will use env var if not provided)
+		"""
+		self.supabase = supabase_client
+		self.cartesia = Cartesia(api_key=cartesia_api_key or os.getenv("CARTESIA_API_KEY"))
+	
+	def process_voice_recording(self, session_id: str) -> dict:
+		"""
+		Process voice recording for a given session.
+		
+		Process:
+		1. Look up recording_id from interview_calls table
+		2. Download recording from Supabase storage
+		3. Process audio (silence removal, VAD)
+		4. Get user_id from interview_calls table
+		5. Clone voice with Cartesia
+		6. Update user_profiles with voice_id
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			dict: Processing result with status and processed file path
+			
+		Raises:
+			ValueError: If session_id is invalid or recording not found
+			Exception: If processing fails
+		"""
+		if not session_id:
+			raise ValueError("session_id is required")
+		
+		if not self.supabase:
+			raise Exception("Supabase client not initialized")
+		
+		logger.info(f"Processing voice recording for session {session_id}")
+		
+		# Step 1: Get recording_id from interview_calls table
+		recording_id = self._get_recording_info(session_id)
+		
+		if not recording_id:
+			raise ValueError(f"No recording_id found for session {session_id}")
+		
+		logger.debug(f"Found recording_id: {recording_id}")
+		
+		# Step 2: Download recording from Supabase storage
+		local_recording_path = self._download_recording(recording_id)
+		
+		processed_path = None
+		try:
+			# Step 3: Process audio (silence removal, VAD)
+			processed_path = self._process_audio(local_recording_path, recording_id)
+			
+			logger.info(f"Voice recording processing completed for session {session_id}")
+			
+			# TEMPORARY: Save processed audio locally for testing
+			import shutil
+			test_output_path = f"/Users/tom/processed_voice_{recording_id}.wav"
+			shutil.copy(processed_path, test_output_path)
+			logger.info(f"[TEMP] Saved processed audio to: {test_output_path}")
+			# END TEMPORARY
+			
+			# Step 4: Get user_id for voice cloning and profile update
+			user_id = self._get_user_id_from_session(session_id)
+			
+			if not user_id:
+				raise ValueError(f"No user_id found for session {session_id}")
+			
+			# Step 5: Clone voice with Cartesia
+			voice_id = self._clone_voice_with_cartesia(processed_path, user_id)
+			
+			logger.info(f"Voice cloned successfully with Cartesia. Voice ID: {voice_id}")
+			
+			# Step 6: Update user_profiles table with voice_id
+			self._update_user_profile_voice_id(user_id, voice_id)
+			
+			logger.info(f"Updated user_profiles with voice_id for user {user_id}")
+			
+			return {
+				"status": "success",
+				"message": "Voice recording processed and cloned successfully",
+				"session_id": session_id,
+				"recording_id": recording_id,
+				"user_id": user_id,
+				"voice_id": voice_id
+			}
+			
+		finally:
+			# Clean up temporary input file
+			if local_recording_path and os.path.exists(local_recording_path):
+				try:
+					os.unlink(local_recording_path)
+					logger.debug(f"Cleaned up temporary input file: {local_recording_path}")
+				except Exception as e:
+					logger.warning(f"Failed to clean up temporary file {local_recording_path}: {e}")
+			
+			# Clean up processed file
+			if processed_path and os.path.exists(processed_path):
+				try:
+					os.unlink(processed_path)
+					logger.debug(f"Cleaned up processed file: {processed_path}")
+				except Exception as e:
+					logger.warning(f"Failed to clean up processed file {processed_path}: {e}")
+	
+	def _get_recording_info(self, session_id: str) -> str:
+		"""
+		Get recording_id from interview_calls table.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			str: recording_id
+			
+		Raises:
+			ValueError: If session not found
+		"""
+		try:
+			response = self.supabase.table("interview_calls")\
+				.select("recording_id")\
+				.eq("session_id", session_id)\
+				.limit(1)\
+				.execute()
+			
+			if not response.data or len(response.data) == 0:
+				raise ValueError(f"No call found for session_id: {session_id}")
+			
+			call_data = response.data[0]
+			recording_id = call_data.get('recording_id')
+			
+			return recording_id
+			
+		except Exception as e:
+			logger.error(f"Failed to fetch recording info for session {session_id}: {e}")
+			raise
+	
+	def _download_recording(self, recording_id: str) -> str:
+		"""
+		Download recording from Supabase storage bucket.
+		
+		Args:
+			recording_id: The recording UUID
+			
+		Returns:
+			str: Path to downloaded temporary file
+			
+		Raises:
+			Exception: If download fails
+		"""
+		try:
+			# Construct the storage path (flat structure, no subdirectories)
+			storage_path = f"{recording_id}.mp4"
+			
+			logger.debug(f"Downloading recording from interview-recordings bucket: {storage_path}")
+			
+			# Download from Supabase storage
+			response = self.supabase.storage.from_("interview-recordings").download(storage_path)
+			
+			if not response:
+				raise Exception(f"Empty response downloading recording {storage_path}")
+			
+			# Save to temporary file
+			temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+			temp_file.write(response)
+			temp_file.close()
+			
+			logger.debug(f"Recording downloaded successfully ({len(response)} bytes)")
+			return temp_file.name
+			
+		except Exception as e:
+			logger.error(f"Failed to download recording '{storage_path}': {e}")
+			raise Exception(f"Recording download failed for '{storage_path}': {e}")
+	
+	def _process_audio(
+		self,
+		input_path: str,
+		recording_id: str,
+		buffer_ms: int = 250,
+		sample_rate: int = 16000,
+		min_silence_length_ms: int = 500
+	) -> str:
+		"""
+		Process audio to remove silence using Silero VAD.
+		
+		Args:
+			input_path: Path to input audio file
+			recording_id: The recording UUID (for naming output)
+			buffer_ms: Buffer duration between speech segments (milliseconds)
+			sample_rate: Sample rate for VAD processing (16000 Hz recommended)
+			min_silence_length_ms: Minimum silence length to be considered a gap
+			
+		Returns:
+			str: Path to processed audio file
+			
+		Raises:
+			Exception: If processing fails
+		"""
+		try:
+			logger.debug(f"Processing audio: {input_path}")
+			
+			# Step 1: Load audio
+			audio = self._load_audio(input_path)
+			
+			# Step 2: Detect speech segments using Silero VAD
+			speech_segments = self._detect_speech_segments(
+				audio,
+				sample_rate,
+				min_silence_length_ms
+			)
+			
+			# Step 3: Stitch segments together
+			processed_audio = self._stitch_audio_segments(audio, speech_segments, buffer_ms)
+			
+			# Step 4: Export to temporary file
+			output_path = os.path.join(
+				tempfile.gettempdir(),
+				f"processed_{recording_id}.wav"
+			)
+			
+			logger.debug(f"Exporting processed audio to: {output_path}")
+			processed_audio.export(
+				output_path,
+				format="wav"
+			)
+			
+			logger.debug(f"Audio processing complete: {len(processed_audio)}ms processed")
+			return output_path
+			
+		except Exception as e:
+			logger.error(f"Audio processing failed: {e}")
+			raise Exception(f"Audio processing failed: {e}")
+	
+	def _load_audio(self, input_path: str) -> AudioSegment:
+		"""
+		Load audio file and convert to AudioSegment.
+		
+		Args:
+			input_path: Path to input audio file
+			
+		Returns:
+			AudioSegment object
+		"""
+		logger.debug(f"Loading audio from: {input_path}")
+		audio = AudioSegment.from_file(input_path)
+		logger.debug(f"Audio loaded: {len(audio)}ms, {audio.frame_rate}Hz, {audio.channels} channel(s)")
+		return audio
+	
+	def _detect_speech_segments(
+		self,
+		audio: AudioSegment,
+		sample_rate: int,
+		min_silence_length_ms: int
+	) -> list[tuple[int, int]]:
+		"""
+		Use Silero VAD to detect speech segments in the audio.
+		
+		Args:
+			audio: AudioSegment object
+			sample_rate: Sample rate for VAD processing
+			min_silence_length_ms: Minimum silence length between speech
+			
+		Returns:
+			List of (start_ms, end_ms) tuples indicating speech segments
+		"""
+		logger.debug("Detecting speech segments using Silero VAD...")
+		
+		# Load Silero VAD model
+		model, utils = torch.hub.load(
+			repo_or_dir='snakers4/silero-vad',
+			model='silero_vad',
+			force_reload=False,
+			onnx=False
+		)
+		
+		(get_speech_timestamps, _, read_audio, *_) = utils
+		
+		# Convert audio to the right format for Silero
+		# Silero expects 16kHz mono audio
+		audio_16k = audio.set_frame_rate(sample_rate).set_channels(1)
+		
+		# Convert to numpy array
+		samples = np.array(audio_16k.get_array_of_samples()).astype(np.float32)
+		
+		# Normalize to [-1, 1]
+		if audio_16k.sample_width == 2:  # 16-bit audio
+			samples = samples / 32768.0
+		elif audio_16k.sample_width == 4:  # 32-bit audio
+			samples = samples / 2147483648.0
+		
+		# Convert to torch tensor
+		audio_tensor = torch.from_numpy(samples)
+		
+		# Get speech timestamps
+		speech_timestamps = get_speech_timestamps(
+			audio_tensor,
+			model,
+			sampling_rate=sample_rate,
+			threshold=0.5,  # Speech probability threshold
+			min_speech_duration_ms=100,  # Minimum speech duration
+			min_silence_duration_ms=min_silence_length_ms,
+			window_size_samples=512,
+		)
+		
+		# Convert sample indices to milliseconds
+		segments = []
+		for timestamp in speech_timestamps:
+			start_sample = timestamp['start']
+			end_sample = timestamp['end']
+			
+			# Convert from 16kHz samples to milliseconds
+			start_ms = int((start_sample / sample_rate) * 1000)
+			end_ms = int((end_sample / sample_rate) * 1000)
+			
+			segments.append((start_ms, end_ms))
+		
+		logger.debug(f"Found {len(segments)} speech segments")
+		return segments
+	
+	def _stitch_audio_segments(
+		self,
+		audio: AudioSegment,
+		segments: list[tuple[int, int]],
+		buffer_ms: int,
+		target_duration_ms: int = 10000  # Target 10 seconds for voice cloning
+	) -> AudioSegment:
+		"""
+		Extract speech segments and stitch them together with buffers.
+		Stops adding segments once the target duration is reached.
+		
+		Args:
+			audio: Original AudioSegment
+			segments: List of (start_ms, end_ms) tuples
+			buffer_ms: Buffer duration to add between segments
+			target_duration_ms: Target duration in milliseconds (default: 10000ms = 10s)
+			
+		Returns:
+			Stitched AudioSegment
+		"""
+		logger.debug(f"Stitching segments with {buffer_ms}ms buffers (target: {target_duration_ms}ms)...")
+		
+		if not segments:
+			logger.warning("No speech segments found, returning original audio")
+			return audio
+		
+		# Create silence buffer
+		silence_buffer = AudioSegment.silent(duration=buffer_ms, frame_rate=audio.frame_rate)
+		
+		# Extract and concatenate segments until target duration is reached
+		result = None
+		total_duration_ms = 0
+		segments_used = 0
+		
+		for i, (start_ms, end_ms) in enumerate(segments):
+			segment = audio[start_ms:end_ms]
+			segment_duration = end_ms - start_ms
+			
+			if result is None:
+				result = segment
+				total_duration_ms = segment_duration
+				segments_used = 1
+				logger.debug(f"  Segment {i+1}: {start_ms}ms - {end_ms}ms ({segment_duration}ms) | Total: {total_duration_ms}ms")
+				
+				# If first segment is already >= target duration, stop here
+				if total_duration_ms >= target_duration_ms:
+					logger.info(f"First segment already {total_duration_ms}ms (>= {target_duration_ms}ms target), using only this segment")
+					break
+			else:
+				# Check if adding this segment (plus buffer) would be useful
+				potential_total = total_duration_ms + buffer_ms + segment_duration
+				
+				# Add buffer between segments
+				result = result + silence_buffer + segment
+				total_duration_ms = len(result)  # Actual duration of stitched audio
+				segments_used += 1
+				
+				logger.debug(f"  Segment {i+1}: {start_ms}ms - {end_ms}ms ({segment_duration}ms) | Total: {total_duration_ms}ms")
+				
+				# Stop if we've reached or exceeded the target duration
+				if total_duration_ms >= target_duration_ms:
+					logger.info(f"Reached target duration: {total_duration_ms}ms (>= {target_duration_ms}ms), using {segments_used} segments")
+					break
+		
+		logger.info(f"Stitched {segments_used} of {len(segments)} segments, final duration: {total_duration_ms}ms")
+		return result
+	
+	def _clone_voice_with_cartesia(self, audio_file_path: str, user_id: str) -> str:
+		"""
+		Clone voice using Cartesia API.
+		
+		Args:
+			audio_file_path: Path to the processed audio file (WAV)
+			user_id: The user's ID (used for naming the voice)
+			
+		Returns:
+			str: The voice_id from Cartesia
+			
+		Raises:
+			Exception: If cloning fails
+		"""
+		try:
+			if not os.path.exists(audio_file_path):
+				raise FileNotFoundError(f"Audio file not found at: {audio_file_path}")
+			
+			# Use user_id as the voice name
+			voice_name = user_id
+			
+			logger.info(f"Uploading audio to Cartesia for voice cloning: '{voice_name}'")
+			
+			# Clone the voice using Cartesia SDK
+			with open(audio_file_path, "rb") as file_handle:
+				response = self.cartesia.voices.clone(
+					clip=file_handle,
+					name=voice_name,
+					description=f"Cloned voice for user {user_id}",
+					language="en",
+					mode="similarity"
+				)
+			
+			# Extract voice ID from response
+			voice_id = response["id"]
+			
+			logger.info(f"Voice cloned successfully. Voice ID: {voice_id}")
+			return voice_id
+			
+		except Exception as e:
+			logger.error(f"Failed to clone voice with Cartesia: {e}")
+			raise Exception(f"Voice cloning failed: {e}")
+	
+	def _get_user_id_from_session(self, session_id: str) -> str:
+		"""
+		Get user_id from interview_calls table.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			str: user_id
+			
+		Raises:
+			ValueError: If session not found
+		"""
+		try:
+			response = self.supabase.table("interview_calls")\
+				.select("user_id")\
+				.eq("session_id", session_id)\
+				.limit(1)\
+				.execute()
+			
+			if not response.data or len(response.data) == 0:
+				raise ValueError(f"No call found for session_id: {session_id}")
+			
+			call_data = response.data[0]
+			user_id = call_data.get('user_id')
+			
+			return user_id
+			
+		except Exception as e:
+			logger.error(f"Failed to fetch user_id for session {session_id}: {e}")
+			raise
+	
+	def _update_user_profile_voice_id(self, user_id: str, voice_id: str) -> None:
+		"""
+		Update the user_profiles table with the voice_id.
+		
+		Args:
+			user_id: The user's ID
+			voice_id: The voice_id from Cartesia
+			
+		Raises:
+			Exception: If update fails
+		"""
+		try:
+			# Check if profile exists
+			existing = self.supabase.table("user_profiles")\
+				.select("id")\
+				.eq("user_id", user_id)\
+				.execute()
+			
+			if existing.data and len(existing.data) > 0:
+				# Update existing profile
+				logger.debug(f"Updating voice_id for user {user_id}")
+				self.supabase.table("user_profiles")\
+					.update({"voice_id": voice_id})\
+					.eq("user_id", user_id)\
+					.execute()
+			else:
+				# Create new profile with just the voice_id
+				logger.debug(f"Creating new profile with voice_id for user {user_id}")
+				self.supabase.table("user_profiles")\
+					.insert({"user_id": user_id, "voice_id": voice_id})\
+					.execute()
+			
+			logger.debug(f"Successfully updated voice_id in user_profiles for user {user_id}")
+			
+		except Exception as e:
+			logger.error(f"Failed to update user_profiles with voice_id: {e}")
+			raise Exception(f"Database update failed: {e}")

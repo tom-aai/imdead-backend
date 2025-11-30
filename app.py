@@ -30,6 +30,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 HEDRA_API_KEY = os.getenv("HEDRA_API_KEY")
+CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
 
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_SERVICE_KEY:
@@ -44,8 +45,11 @@ if not ANTHROPIC_API_KEY:
 if not HEDRA_API_KEY:
 	logger.warning("Hedra API key not found - avatar generation will be unavailable")
 
+if not CARTESIA_API_KEY:
+	logger.warning("Cartesia API key not found - voice cloning will be unavailable")
+
 # Initialize services
-post_call_orchestrator = PostCallOrchestrator(supabase, ANTHROPIC_API_KEY, HEDRA_API_KEY)
+post_call_orchestrator = PostCallOrchestrator(supabase, ANTHROPIC_API_KEY, HEDRA_API_KEY, CARTESIA_API_KEY)
 hedra_avatar_generator = HedraAvatarGenerator(supabase, HEDRA_API_KEY)
 
 
@@ -191,8 +195,8 @@ def upload_avatar_image_endpoint():
 		if file_ext not in allowed_extensions:
 			return jsonify({"error": f"File type not allowed. Allowed types: {', '.join(allowed_extensions)}"}), 400
 		
-		# Generate a unique picture_id
-		picture_id = f"{user_id}/{uuid.uuid4()}.{file_ext}"
+		# Generate a unique picture_id (flat structure, no subdirectories)
+		picture_id = f"{uuid.uuid4()}.{file_ext}"
 		
 		# Upload to Supabase storage
 		file_data = file.read()

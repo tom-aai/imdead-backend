@@ -78,16 +78,19 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
             # No cleanup needed here since we want to test updating existing records
             logger.debug("Skipping user_profiles cleanup - profile_aggregation updates existing records")
         
-        # Hedra avatar generation cleanup
-        if not task_name or task_name == "hedra_avatar_generation":
-            response = supabase.table("user_avatar_images").delete().eq("session_id", session_id).execute()
-            if response.data:
-                logger.debug(f"Deleted {len(response.data)} record(s) from user_avatar_images")
-        
-        # Add cleanup for future tasks here as they're implemented
-        # Example:
-        # if not task_name or task_name == "voice_cloning":
-        #     response = supabase.table("voice_clones").delete().eq("session_id", session_id).execute()
+		# Hedra avatar generation cleanup
+		if not task_name or task_name == "hedra_avatar_generation":
+			response = supabase.table("user_avatar_images").delete().eq("session_id", session_id).execute()
+			if response.data:
+				logger.debug(f"Deleted {len(response.data)} record(s) from user_avatar_images")
+		
+		# Voice cloning cleanup
+		# Voice cloning creates temporary files but doesn't write to database (yet)
+		# No cleanup needed here - files are temporary and will be cleaned up by the OS
+		if not task_name or task_name == "voice_cloning":
+			logger.debug("Voice cloning cleanup - no database records to delete")
+		
+		# Add cleanup for future tasks here as they're implemented
         
         logger.debug("Cleanup complete")
         
@@ -141,28 +144,43 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
                 "profile_aggregation": result
             }
         }
-    elif task_name == "hedra_avatar_generation":
-        result = await orchestrator._run_with_retry(
-            task_name="hedra_avatar_generation",
-            task_func=orchestrator._generate_hedra_avatar,
-            session_id=session_id,
-            max_retries=3
-        )
-        return {
-            "session_id": session_id,
-            "status": "success",
-            "tasks": {
-                "hedra_avatar_generation": result
-            }
-        }
-    else:
-        logger.error(f"Unknown task: {task_name}")
-        logger.info("Available tasks:")
-        logger.info("  - transcript_processing")
-        logger.info("  - profile_aggregation")
-        logger.info("  - hedra_avatar_generation")
-        logger.info("  (more tasks will be added as they're implemented)")
-        sys.exit(1)
+	elif task_name == "hedra_avatar_generation":
+		result = await orchestrator._run_with_retry(
+			task_name="hedra_avatar_generation",
+			task_func=orchestrator._generate_hedra_avatar,
+			session_id=session_id,
+			max_retries=3
+		)
+		return {
+			"session_id": session_id,
+			"status": "success",
+			"tasks": {
+				"hedra_avatar_generation": result
+			}
+		}
+	elif task_name == "voice_cloning":
+		result = await orchestrator._run_with_retry(
+			task_name="voice_cloning",
+			task_func=orchestrator._process_voice_recording,
+			session_id=session_id,
+			max_retries=3
+		)
+		return {
+			"session_id": session_id,
+			"status": "success",
+			"tasks": {
+				"voice_cloning": result
+			}
+		}
+	else:
+		logger.error(f"Unknown task: {task_name}")
+		logger.info("Available tasks:")
+		logger.info("  - transcript_processing")
+		logger.info("  - profile_aggregation")
+		logger.info("  - hedra_avatar_generation")
+		logger.info("  - voice_cloning")
+		logger.info("  (more tasks will be added as they're implemented)")
+		sys.exit(1)
 
 
 async def run_direct_avatar_generation(supabase, hedra_key: str, user_id: str, picture_id: str, session_id: str):
@@ -259,10 +277,14 @@ def print_results(results: dict):
                 task_summary["sessions_analyzed"] = result.get("record_count")
                 task_summary["consolidated_myers_briggs"] = result.get("synthesis", {}).get("consolidated_myers_briggs")
                 
-            elif task_name == "hedra_avatar_generation":
-                task_summary["record_id"] = result.get("record_id")
-                task_summary["hedra_avatar_id"] = result.get("hedra_avatar_id")
-                task_summary["picture_id"] = result.get("picture_id")
+			elif task_name == "hedra_avatar_generation":
+				task_summary["record_id"] = result.get("record_id")
+				task_summary["hedra_avatar_id"] = result.get("hedra_avatar_id")
+				task_summary["picture_id"] = result.get("picture_id")
+				
+			elif task_name == "voice_cloning":
+				task_summary["recording_id"] = result.get("recording_id")
+				task_summary["processed_file_path"] = result.get("processed_file_path")
                 
         elif task_result.get("status") == "error":
             task_summary["error"] = task_result.get("error")
@@ -296,6 +318,9 @@ Examples:
   
   # Run only Hedra avatar generation (from call)
   python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task hedra_avatar_generation
+  
+  # Run only voice cloning
+  python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task voice_cloning
   
   # Run direct avatar generation (e.g., user uploads from profile)
   python sandbox_orchestrator.py --user-id abc123 --picture-id profile-pic.jpg --session-id RM_7Vn7ZtZWQxZX
