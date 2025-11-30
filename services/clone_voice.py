@@ -74,14 +74,7 @@ class VoiceCloningService:
 			processed_path = self._process_audio(local_recording_path, recording_id)
 			
 			logger.info(f"Voice recording processing completed for session {session_id}")
-			
-			# TEMPORARY: Save processed audio locally for testing
-			import shutil
-			test_output_path = f"/Users/tom/processed_voice_{recording_id}.wav"
-			shutil.copy(processed_path, test_output_path)
-			logger.info(f"[TEMP] Saved processed audio to: {test_output_path}")
-			# END TEMPORARY
-			
+						
 			# Step 4: Get user_id for voice cloning and profile update
 			user_id = self._get_user_id_from_session(session_id)
 			
@@ -429,17 +422,20 @@ class VoiceCloningService:
 			logger.info(f"Uploading audio to Cartesia for voice cloning: '{voice_name}'")
 			
 			# Clone the voice using Cartesia SDK
+			# mode="similarity" focuses on high resemblance to source audio
+			# enhance=True applies additional audio enhancement for better quality
 			with open(audio_file_path, "rb") as file_handle:
 				response = self.cartesia.voices.clone(
 					clip=file_handle,
 					name=voice_name,
 					description=f"Cloned voice for user {user_id}",
 					language="en",
-					mode="similarity"
+					mode="similarity",
+					enhance=True
 				)
 			
-			# Extract voice ID from response
-			voice_id = response["id"]
+			# Extract voice ID from response (VoiceMetadata object)
+			voice_id = response.id
 			
 			logger.info(f"Voice cloned successfully. Voice ID: {voice_id}")
 			return voice_id
