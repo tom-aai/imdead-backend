@@ -2,7 +2,7 @@
 Hot take video generation service.
 
 This service generates videos from hot takes:
-1. Generates audio from hot_take_1 text using Cartesia
+1. Generates audio from hot_take_x text using Cartesia
 2. Uses the Hedra avatar to create a video with the audio
 """
 
@@ -10,9 +10,13 @@ import os
 import logging
 import tempfile
 import time
+import json
+import wave
 from pathlib import Path
+from typing import List, Dict, Tuple
 import requests
 from cartesia import Cartesia
+from moviepy import VideoFileClip, TextClip, CompositeVideoClip
 
 logger = logging.getLogger(__name__)
 
@@ -53,39 +57,73 @@ class HotTakeVideoGenerationService:
             output_dir: Directory to save generated videos (optional, defaults to temp dir)
         """
         self.supabase = supabase_client
-        self.cartesia = Cartesia(api_key=cartesia_api_key or os.getenv("CARTESIA_API_KEY"))
+        self.cartesia_api_key = cartesia_api_key or os.getenv("CARTESIA_API_KEY")
+        self.cartesia = Cartesia(api_key=self.cartesia_api_key)
         self.hedra_api_key = hedra_api_key or os.getenv("HEDRA_API_KEY")
         self.output_dir = output_dir or tempfile.gettempdir()
         
         if not self.hedra_api_key:
             raise ValueError("HEDRA_API_KEY is required")
     
+    def _get_font_path(self) -> str:
+        """
+        Get the path to a suitable font for captions.
+        
+        On macOS, tries to find Arial Bold or falls back to other available fonts.
+        
+        Returns:
+            str: Path to a font file that can be used with TextClip
+        """
+        # List of font paths to try (in order of preference)
+        font_paths = [
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/Library/Fonts/Arial Bold.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/Supplemental/Helvetica.ttc",
+            "/System/Library/Fonts/SFNSDisplay.ttf",
+            "/System/Library/Fonts/SFNS.ttf",
+        ]
+        
+        for font_path in font_paths:
+            if os.path.exists(font_path):
+                logger.info(f"Using font: {font_path}")
+                return font_path
+        
+        # If no fonts found, raise an error
+        raise FileNotFoundError(
+            "Could not find a suitable font file. Please ensure Arial Bold or Helvetica is installed."
+        )
+    
     def generate_hot_take_video(
         self,
         session_id: str,
         text_prompt: str = "professional interview conversation",
         aspect_ratio: str = "16:9",
-        resolution: str = "720p"
+        resolution: str = "720p",
+        hot_take_number: int = 1
     ) -> dict:
         """
-        Generate a video from a hot take.
+        Generate a video from a hot take with word-highlighted captions.
         
         Process:
-        1. Get hot_take_1 and hedra_avatar_id from interview_call_analysis table
+        1. Get hot_take text and hedra_avatar_id from interview_call_analysis table
         2. Get user_id from interview_calls table
         3. Get voice_id from user_profiles table
-        4. Generate audio from hot_take_1 text using Cartesia
+        4. Generate audio from hot_take text using Cartesia (with word timestamps)
         5. Generate video using Hedra avatar and audio
-        6. Save video locally
+        6. Add word-highlighted captions to video
+        7. Upload captioned video to Supabase storage
+        8. Update interview_call_analysis with video filename
         
         Args:
             session_id: The LiveKit session ID
             text_prompt: Description for the video generation
             aspect_ratio: Video aspect ratio ("16:9", "9:16", "1:1")
             resolution: Video resolution ("540p", "720p")
+            hot_take_number: Which hot take to use (1 or 2)
             
         Returns:
-            dict: Generation result with status and video path
+            dict: Generation result with status, video path, and storage info
             
         Raises:
             ValueError: If session_id is invalid or data not found
@@ -97,18 +135,21 @@ class HotTakeVideoGenerationService:
         if not self.supabase:
             raise Exception("Supabase client not initialized")
         
-        logger.info(f"🎬 Starting hot take video generation for session {session_id}")
+        if hot_take_number not in [1, 2]:
+            raise ValueError("hot_take_number must be 1 or 2")
         
-        # Step 1: Get hot_take_1 and hedra_avatar_id from interview_call_analysis
-        hot_take_text, hedra_avatar_id = self._get_hot_take_data(session_id)
+        logger.info(f"🎬 Starting hot take #{hot_take_number} video generation for session {session_id}")
+        
+        # Step 1: Get hot_take and hedra_avatar_id from interview_call_analysis
+        hot_take_text, hedra_avatar_id = self._get_hot_take_data(session_id, hot_take_number)
         
         if not hot_take_text:
-            raise ValueError(f"No hot_take_1 found for session {session_id}")
+            raise ValueError(f"No hot_take_{hot_take_number} found for session {session_id}")
         
         if not hedra_avatar_id:
             raise ValueError(f"No hedra_avatar_id found for session {session_id}")
         
-        logger.info(f"📝 Hot take text: {hot_take_text[:100]}...")
+        logger.info(f"📝 Hot take #{hot_take_number} text: {hot_take_text[:100]}...")
         logger.info(f"🎭 Hedra avatar ID: {hedra_avatar_id}")
         
         # Step 2: Get user_id from interview_calls
@@ -126,12 +167,15 @@ class HotTakeVideoGenerationService:
         logger.info(f"🎤 Using voice ID: {voice_id}")
         
         audio_path = None
+        video_path = None
+        captioned_video_path = None
         try:
-            # Step 4: Generate audio from hot_take_1 text using Cartesia
-            audio_path = self._generate_audio_with_cartesia(
+            # Step 4: Generate audio from hot_take text using Cartesia (with word timestamps)
+            audio_path, word_timestamps = self._generate_audio_with_cartesia(
                 hot_take_text,
                 voice_id,
-                session_id
+                session_id,
+                hot_take_number
             )
             
             logger.info(f"✅ Audio generated: {audio_path}")
@@ -141,6 +185,7 @@ class HotTakeVideoGenerationService:
                 hedra_avatar_id=hedra_avatar_id,
                 audio_path=audio_path,
                 session_id=session_id,
+                hot_take_number=hot_take_number,
                 text_prompt=text_prompt,
                 aspect_ratio=aspect_ratio,
                 resolution=resolution
@@ -148,13 +193,40 @@ class HotTakeVideoGenerationService:
             
             logger.info(f"🎉 Video generated successfully: {video_path}")
             
+            # Step 6: Add captions to video
+            captioned_video_path = self._add_captions_to_video(
+                video_path=video_path,
+                word_timestamps=word_timestamps,
+                session_id=session_id,
+                hot_take_number=hot_take_number
+            )
+            
+            logger.info(f"📝 Captions added to video: {captioned_video_path}")
+            
+            # Step 7: Upload captioned video to Supabase storage
+            storage_path = self._upload_video_to_storage(
+                video_path=captioned_video_path,
+                user_id=user_id,
+                session_id=session_id,
+                hot_take_number=hot_take_number
+            )
+            
+            logger.info(f"☁️ Video uploaded to storage: {storage_path}")
+            
+            # Step 8: Update interview_call_analysis with video filename
+            self._update_video_filename_in_db(session_id, storage_path, hot_take_number)
+            
+            logger.info(f"✅ Database updated with video filename")
+            
             return {
                 "status": "success",
-                "message": "Hot take video generated successfully",
+                "message": f"Hot take #{hot_take_number} video generated successfully",
                 "session_id": session_id,
                 "user_id": user_id,
-                "video_path": video_path,
-                "hot_take_text": hot_take_text
+                "video_path": captioned_video_path,
+                "storage_path": storage_path,
+                "hot_take_text": hot_take_text,
+                "hot_take_number": hot_take_number
             }
             
         finally:
@@ -165,23 +237,39 @@ class HotTakeVideoGenerationService:
                     logger.debug(f"Cleaned up temporary audio file: {audio_path}")
                 except Exception as e:
                     logger.warning(f"Failed to clean up audio file {audio_path}: {e}")
+            
+            # Clean up temporary video files (since they're now in storage)
+            if video_path and os.path.exists(video_path):
+                try:
+                    os.unlink(video_path)
+                    logger.debug(f"Cleaned up temporary video file: {video_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up video file {video_path}: {e}")
+            
+            if captioned_video_path and os.path.exists(captioned_video_path):
+                try:
+                    os.unlink(captioned_video_path)
+                    logger.debug(f"Cleaned up temporary captioned video file: {captioned_video_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up captioned video file {captioned_video_path}: {e}")
     
-    def _get_hot_take_data(self, session_id: str) -> tuple[str, str]:
+    def _get_hot_take_data(self, session_id: str, hot_take_number: int = 1) -> tuple[str, str]:
         """
-        Get hot_take_1 and hedra_avatar_id from interview_call_analysis table.
+        Get hot_take and hedra_avatar_id from interview_call_analysis table.
         
         Args:
             session_id: The LiveKit session ID
+            hot_take_number: Which hot take to retrieve (1 or 2)
             
         Returns:
-            tuple[str, str]: (hot_take_1, hedra_avatar_id)
+            tuple[str, str]: (hot_take_text, hedra_avatar_id)
             
         Raises:
             ValueError: If session not found
         """
         try:
             response = self.supabase.table("interview_call_analysis")\
-                .select("hot_take_1, hedra_avatar_id")\
+                .select("hot_take_1, hot_take_2, hedra_avatar_id")\
                 .eq("session_id", session_id)\
                 .limit(1)\
                 .execute()
@@ -190,10 +278,10 @@ class HotTakeVideoGenerationService:
                 raise ValueError(f"No call analysis found for session_id: {session_id}")
             
             analysis_data = response.data[0]
-            hot_take_1 = analysis_data.get('hot_take_1')
+            hot_take_text = analysis_data.get(f'hot_take_{hot_take_number}')
             hedra_avatar_id = analysis_data.get('hedra_avatar_id')
             
-            return hot_take_1, hedra_avatar_id
+            return hot_take_text, hedra_avatar_id
             
         except Exception as e:
             logger.error(f"Failed to fetch hot take data for session {session_id}: {e}")
@@ -267,28 +355,35 @@ class HotTakeVideoGenerationService:
         self,
         text: str,
         voice_id: str,
-        session_id: str
-    ) -> str:
+        session_id: str,
+        hot_take_number: int = 1
+    ) -> Tuple[str, List[Dict]]:
         """
-        Generate audio from text using Cartesia.
+        Generate audio from text using Cartesia SSE endpoint with word timestamps.
         
         Args:
             text: The text to convert to speech
             voice_id: The Cartesia voice ID to use
             session_id: Session ID for naming the output file
+            hot_take_number: Which hot take this is for
             
         Returns:
-            str: Path to the generated audio file
+            Tuple[str, List[Dict]]: (audio_file_path, word_timestamps)
+                word_timestamps format: [{"word": "hello", "start": 0.0, "end": 0.5}, ...]
             
         Raises:
             Exception: If audio generation fails
         """
         try:
-            logger.info(f"🎵 Generating audio with Cartesia (voice: {voice_id})")
+            logger.info(f"🎵 Generating audio with Cartesia SSE (voice: {voice_id})")
             
-            # Generate audio using Cartesia REST API
-            # WAV format provides better quality for video generation
-            url = "https://api.cartesia.ai/tts/bytes"
+            # Prepare SSE request
+            url = "https://api.cartesia.ai/tts/sse"
+            headers = {
+                "X-API-Key": self.cartesia_api_key,
+                "Cartesia-Version": "2024-06-10",
+                "Content-Type": "application/json"
+            }
             
             payload = {
                 "model_id": "sonic-english",
@@ -297,38 +392,125 @@ class HotTakeVideoGenerationService:
                     "mode": "id",
                     "id": voice_id
                 },
-                "language": "en",
                 "output_format": {
-                    "container": "wav",
+                    "container": "raw",
                     "encoding": "pcm_s16le",
                     "sample_rate": 44100
-                }
+                },
+                "language": "en",
+                "add_timestamps": True
             }
             
-            headers = {
-                "Cartesia-Version": "2024-06-10",
-                "X-API-Key": os.getenv("CARTESIA_API_KEY"),
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.post(url, json=payload, headers=headers)
+            # Make SSE request
+            response = requests.post(url, headers=headers, json=payload, stream=True)
             
             if not response.ok:
-                logger.error(f"Cartesia API error: {response.status_code} {response.text}")
-                raise Exception(f"Cartesia API returned {response.status_code}: {response.text}")
+                raise Exception(f"Cartesia API error: {response.status_code} {response.text}")
             
-            # Save to temporary file
-            output_path = os.path.join(
-                tempfile.gettempdir(),
-                f"hot_take_audio_{session_id}.wav"
-            )
+            # Process SSE stream
+            audio_chunks = []
+            word_timestamps = []
+            event_count = 0
             
-            # Write the audio bytes directly to file
-            with open(output_path, "wb") as f:
-                f.write(response.content)
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                    
+                line = line.decode('utf-8')
+                
+                # SSE format: "event: <event_type>" and "data: <json_data>"
+                if line.startswith('event:'):
+                    continue
+                    
+                if line.startswith('data:'):
+                    data_str = line[5:].strip()
+                    event_count += 1
+                    
+                    try:
+                        data = json.loads(data_str)
+                        
+                        # Log first few events to see structure
+                        if event_count <= 3:
+                            logger.info(f"SSE event #{event_count} type: {data.get('type')}")
+                        
+                        # Handle audio chunk - data is in 'data' field when type is 'chunk'
+                        if data.get('type') == 'chunk' and 'data' in data:
+                            # Audio comes as base64 encoded in the 'data' field
+                            import base64
+                            audio_bytes = base64.b64decode(data['data'])
+                            audio_chunks.append(audio_bytes)
+                            if event_count <= 3:
+                                logger.info(f"Found audio chunk of {len(audio_bytes)} bytes")
+                        
+                        # Handle word timestamps - look for timestamp events
+                        if 'word_timestamps' in data:
+                            timestamps_data = data['word_timestamps']
+                            if event_count <= 10:
+                                logger.info(f"Timestamp event structure: {timestamps_data}")
+                            
+                            # Cartesia format: {'words': ['word1', 'word2'], 'start': [0.1, 0.5], 'end': [0.3, 0.7]}
+                            # Convert to: [{'word': 'word1', 'start': 0.1, 'end': 0.3}, ...]
+                            if 'words' in timestamps_data and 'start' in timestamps_data and 'end' in timestamps_data:
+                                words = timestamps_data['words']
+                                starts = timestamps_data['start']
+                                ends = timestamps_data['end']
+                                
+                                for i in range(len(words)):
+                                    word_timestamps.append({
+                                        'word': words[i],
+                                        'start': starts[i],
+                                        'end': ends[i]
+                                    })
+                                
+                                if event_count <= 10:
+                                    logger.info(f"Added {len(words)} words from timestamp event")
+                        
+                        # Also check if timestamps are in the main data object
+                        if data.get('type') == 'timestamps':
+                            if 'words' in data and 'start' in data and 'end' in data:
+                                words = data['words']
+                                starts = data['start']
+                                ends = data['end']
+                                
+                                for i in range(len(words)):
+                                    word_timestamps.append({
+                                        'word': words[i],
+                                        'start': starts[i],
+                                        'end': ends[i]
+                                    })
+                                
+                                logger.info(f"Added {len(words)} words from timestamp event (type=timestamps)")
+                            
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse SSE data on event {event_count}: {e}")
+                        logger.warning(f"Data string: {data_str[:200]}")
+                        continue
             
-            logger.info(f"✅ Audio generated and saved to: {output_path}")
-            return output_path
+            logger.info(f"📊 Processed {event_count} SSE events")
+            
+            # Combine all audio chunks
+            raw_audio = b''.join(audio_chunks)
+            
+            logger.info(f"📊 Received {len(audio_chunks)} audio chunks totaling {len(raw_audio)} bytes")
+            logger.info(f"📊 Received {len(word_timestamps)} word timestamps")
+            
+            # Convert raw PCM to WAV file - save to current directory for debugging
+            output_filename = f"hot_take_{hot_take_number}_audio_{session_id}.wav"
+            output_path = os.path.join(os.getcwd(), output_filename)
+            
+            # Write as WAV file with proper headers
+            with wave.open(output_path, 'wb') as wav_file:
+                wav_file.setnchannels(1)  # Mono
+                wav_file.setsampwidth(2)  # 16-bit (2 bytes)
+                wav_file.setframerate(44100)  # Sample rate
+                wav_file.writeframes(raw_audio)
+            
+            # Get file size for logging
+            file_size = os.path.getsize(output_path)
+            logger.info(f"✅ Audio generated: {output_path}")
+            logger.info(f"📁 Audio file size: {file_size:,} bytes ({file_size / 1024:.2f} KB)")
+            
+            return output_path, word_timestamps
             
         except Exception as e:
             logger.error(f"Failed to generate audio with Cartesia: {e}")
@@ -339,6 +521,7 @@ class HotTakeVideoGenerationService:
         hedra_avatar_id: str,
         audio_path: str,
         session_id: str,
+        hot_take_number: int,
         text_prompt: str,
         aspect_ratio: str,
         resolution: str
@@ -350,6 +533,7 @@ class HotTakeVideoGenerationService:
             hedra_avatar_id: The Hedra avatar asset ID
             audio_path: Path to the audio file
             session_id: Session ID for naming the output file
+            hot_take_number: Which hot take this is for
             text_prompt: Description for the video generation
             aspect_ratio: Video aspect ratio
             resolution: Video resolution
@@ -387,8 +571,8 @@ class HotTakeVideoGenerationService:
                 raise Exception("No download URL found in the response")
             
             output_filename = os.path.join(
-                self.output_dir,
-                f"hot_take_video_{session_id}.mp4"
+                tempfile.gettempdir(),
+                f"hot_take_{hot_take_number}_video_{session_id}.mp4"
             )
             
             self._download_video(status_data["download_url"], output_filename)
@@ -404,6 +588,10 @@ class HotTakeVideoGenerationService:
         """Upload an audio file to Hedra and return the asset ID"""
         logger.info(f"📤 Uploading audio file to Hedra: {audio_path}")
         
+        # Log file info
+        file_size = os.path.getsize(audio_path)
+        logger.info(f"📁 File size: {file_size:,} bytes ({file_size / 1024:.2f} KB)")
+        
         # Create the audio asset
         create_response = session.post(
             "/assets",
@@ -417,7 +605,7 @@ class HotTakeVideoGenerationService:
             raise Exception(f"Failed to create audio asset: {create_response.text}")
         
         audio_id = create_response.json()["id"]
-        logger.debug(f"Created audio asset with ID: {audio_id}")
+        logger.info(f"Created audio asset with ID: {audio_id}")
         
         # Upload the audio file
         with open(audio_path, "rb") as f:
@@ -432,7 +620,9 @@ class HotTakeVideoGenerationService:
             )
             raise Exception(f"Failed to upload audio file: {upload_response.text}")
         
+        upload_result = upload_response.json()
         logger.info(f"✅ Audio uploaded with ID: {audio_id}")
+        logger.debug(f"Upload response: {json.dumps(upload_result, indent=2)}")
         return audio_id
     
     def _create_video_generation(
@@ -459,6 +649,8 @@ class HotTakeVideoGenerationService:
             },
         }
         
+        logger.info(f"Generation request data: {json.dumps(generation_data, indent=2)}")
+        
         response = session.post("/generations", json=generation_data)
         
         if not response.ok:
@@ -470,7 +662,7 @@ class HotTakeVideoGenerationService:
         result = response.json()
         generation_id = result["id"]
         logger.info(f"✅ Created generation with ID: {generation_id}")
-        logger.debug(f"Generation response: {result}")
+        logger.debug(f"Generation response: {json.dumps(result, indent=2)}")
         
         return generation_id
     
@@ -496,11 +688,340 @@ class HotTakeVideoGenerationService:
                 return status_data
             elif status == "error":
                 error_message = status_data.get("error_message", "Unknown error")
-                logger.error(f"Generation failed: {error_message}")
+                # Log the full response to see what Hedra is returning
+                logger.error(f"❌ Hedra generation error!")
+                logger.error(f"Full error response: {json.dumps(status_data, indent=2)}")
+                logger.error(f"Error message: {error_message}")
                 raise Exception(f"Video generation failed: {error_message}")
             
             # Still processing, wait and check again
             time.sleep(5)
+    
+    def _upload_video_to_storage(
+        self,
+        video_path: str,
+        user_id: str,
+        session_id: str,
+        hot_take_number: int
+    ) -> str:
+        """
+        Upload video to Supabase storage.
+        
+        Videos are stored in the interview-hot-take-videos bucket with a flat structure:
+        hot_take_{hot_take_number}_{session_id}.mp4
+        
+        Args:
+            video_path: Local path to the video file
+            user_id: The user's ID (not used for storage path, kept for compatibility)
+            session_id: The session ID
+            hot_take_number: Which hot take this is (1 or 2)
+            
+        Returns:
+            str: The storage path of the uploaded video
+            
+        Raises:
+            Exception: If upload fails
+        """
+        try:
+            # Construct the storage path (flat structure)
+            storage_path = f"hot_take_{hot_take_number}_{session_id}.mp4"
+            
+            logger.info(f"☁️ Uploading video to Supabase storage: {storage_path}")
+            
+            # Read the video file
+            with open(video_path, "rb") as f:
+                video_data = f.read()
+            
+            # Upload to Supabase storage
+            # Using the storage API to upload to the interview-hot-take-videos bucket
+            response = self.supabase.storage.from_("interview-hot-take-videos").upload(
+                path=storage_path,
+                file=video_data,
+                file_options={
+                    "content-type": "video/mp4",
+                    "upsert": "true"  # Overwrite if exists
+                }
+            )
+            
+            logger.info(f"✅ Video uploaded successfully to storage: {storage_path}")
+            return storage_path
+            
+        except Exception as e:
+            logger.error(f"Failed to upload video to storage: {e}")
+            raise Exception(f"Storage upload failed: {e}")
+    
+    def _update_video_filename_in_db(
+        self,
+        session_id: str,
+        storage_path: str,
+        hot_take_number: int
+    ) -> None:
+        """
+        Update interview_call_analysis table with the video filename.
+        
+        Args:
+            session_id: The LiveKit session ID
+            storage_path: The storage path of the video
+            hot_take_number: Which hot take this is (1 or 2)
+            
+        Raises:
+            Exception: If database update fails
+        """
+        try:
+            column_name = f"hot_take_video_{hot_take_number}"
+            
+            logger.info(f"💾 Updating database column {column_name} with: {storage_path}")
+            
+            # Update the specific column in interview_call_analysis
+            response = self.supabase.table("interview_call_analysis")\
+                .update({column_name: storage_path})\
+                .eq("session_id", session_id)\
+                .execute()
+            
+            if not response.data or len(response.data) == 0:
+                raise Exception(f"No rows updated for session_id: {session_id}")
+            
+            logger.info(f"✅ Database updated successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to update database: {e}")
+            raise Exception(f"Database update failed: {e}")
+    
+    def _group_words_into_phrases(
+        self,
+        word_timestamps: List[Dict],
+        words_per_phrase: int = 3
+    ) -> List[List[Dict]]:
+        """
+        Group words into phrases of 2-3 words for caption display.
+        
+        Args:
+            word_timestamps: List of word timestamp dicts
+            words_per_phrase: Number of words per phrase (default 3)
+            
+        Returns:
+            List of phrases, where each phrase is a list of word dicts
+        """
+        phrases = []
+        for i in range(0, len(word_timestamps), words_per_phrase):
+            phrase = word_timestamps[i:i + words_per_phrase]
+            phrases.append(phrase)
+        
+        return phrases
+    
+    def _create_highlighted_caption_clip(
+        self,
+        phrase_words: List[Dict],
+        current_word_index: int,
+        video_width: int,
+        video_height: int,
+        start_time: float,
+        duration: float
+    ) -> TextClip:
+        """
+        Create a caption clip with word highlighting.
+        
+        Args:
+            phrase_words: List of words in the current phrase
+            current_word_index: Index of the word to highlight
+            video_width: Width of the video
+            video_height: Height of the video
+            start_time: When this caption should appear
+            duration: How long this caption should last
+            
+        Returns:
+            TextClip with highlighted word
+        """
+        # Build the caption text with color markup
+        caption_parts = []
+        for i, word_data in enumerate(phrase_words):
+            word = word_data['word']
+            if i == current_word_index:
+                # Current word - highlighted in yellow
+                caption_parts.append(word)
+            else:
+                # Other words - white
+                caption_parts.append(word)
+        
+        caption_text = ' '.join(caption_parts)
+        
+        # Create text clip with styling
+        # Note: MoviePy doesn't support inline color changes easily,
+        # so we'll create overlapping clips for the highlight effect
+        txt_clip = TextClip(
+            caption_text,
+            fontsize=70,
+            color='white',
+            font=self._get_font_path(),
+            stroke_color='black',
+            stroke_width=3,
+            method='caption',
+            size=(video_width * 0.9, None)
+        )
+        
+        # Position at bottom of video (10% from bottom)
+        txt_clip = txt_clip.with_position(('center', video_height * 0.85))
+        txt_clip = txt_clip.with_start(start_time)
+        txt_clip = txt_clip.with_duration(duration)
+        
+        return txt_clip
+    
+    def _create_word_highlight_clips(
+        self,
+        word_timestamps: List[Dict],
+        video_width: int,
+        video_height: int
+    ) -> List[TextClip]:
+        """
+        Create caption clips with word-by-word highlighting effect.
+        
+        Args:
+            word_timestamps: List of word timestamp dicts
+            video_width: Width of the video
+            video_height: Height of the video
+            
+        Returns:
+            List of TextClip objects for compositing
+        """
+        caption_clips = []
+        
+        # Group words into phrases
+        phrases = self._group_words_into_phrases(word_timestamps)
+        
+        logger.info(f"Creating {len(phrases)} caption phrases from {len(word_timestamps)} words")
+        
+        for phrase_words in phrases:
+            # Determine the time span for this phrase
+            phrase_start = phrase_words[0]['start']
+            phrase_end = phrase_words[-1]['end']
+            
+            # Create a clip for each word being highlighted in the phrase
+            for i, word_data in enumerate(phrase_words):
+                word_start = word_data['start']
+                word_end = word_data['end']
+                word_duration = word_end - word_start
+                
+                # Create base text (all words in white)
+                phrase_text = ' '.join([w['word'] for w in phrase_words])
+                
+                # MoviePy 2.x uses text parameter instead of positional
+                base_clip = TextClip(
+                    text=phrase_text,
+                    font_size=70,
+                    color='white',
+                    font=self._get_font_path(),
+                    stroke_color='black',
+                    stroke_width=3,
+                    size=(int(video_width * 0.9), None)
+                )
+                base_clip = base_clip.with_position(('center', int(video_height * 0.85)))
+                base_clip = base_clip.with_start(word_start)
+                base_clip = base_clip.with_duration(word_duration)
+                
+                caption_clips.append(base_clip)
+                
+                # Create highlight overlay for current word
+                # We'll create the highlighted word separately
+                highlighted_word = word_data['word']
+                
+                # Calculate position offset for the highlighted word
+                words_before = ' '.join([w['word'] for w in phrase_words[:i]])
+                
+                highlight_clip = TextClip(
+                    text=highlighted_word,
+                    font_size=70,
+                    color='yellow',
+                    font=self._get_font_path(),
+                    stroke_color='black',
+                    stroke_width=3
+                )
+                
+                # Position the highlight over the correct word
+                # This is approximate - calculating exact x position is complex
+                base_x_offset = len(words_before) * 35 if words_before else 0
+                x_pos = (video_width // 2) - (len(phrase_text) * 20) + base_x_offset
+                y_pos = int(video_height * 0.85)
+                
+                highlight_clip = highlight_clip.with_position((x_pos, y_pos))
+                highlight_clip = highlight_clip.with_start(word_start)
+                highlight_clip = highlight_clip.with_duration(word_duration)
+                
+                caption_clips.append(highlight_clip)
+        
+        return caption_clips
+    
+    def _add_captions_to_video(
+        self,
+        video_path: str,
+        word_timestamps: List[Dict],
+        session_id: str,
+        hot_take_number: int
+    ) -> str:
+        """
+        Add word-highlighted captions to video using MoviePy.
+        
+        Args:
+            video_path: Path to the video file
+            word_timestamps: List of word timestamp dicts from Cartesia
+            session_id: Session ID for naming the output file
+            hot_take_number: Which hot take this is for
+            
+        Returns:
+            str: Path to the captioned video file
+            
+        Raises:
+            Exception: If caption generation fails
+        """
+        try:
+            logger.info(f"🎬 Adding captions to video: {video_path}")
+            
+            # Load the video
+            video = VideoFileClip(video_path)
+            video_width, video_height = video.size
+            
+            logger.info(f"Video dimensions: {video_width}x{video_height}")
+            
+            # Create caption clips
+            caption_clips = self._create_word_highlight_clips(
+                word_timestamps,
+                video_width,
+                video_height
+            )
+            
+            logger.info(f"Created {len(caption_clips)} caption clips")
+            
+            # Composite captions onto video
+            final_video = CompositeVideoClip([video] + caption_clips)
+            
+            # Generate output path
+            output_path = os.path.join(
+                tempfile.gettempdir(),
+                f"hot_take_{hot_take_number}_captioned_{session_id}.mp4"
+            )
+            
+            logger.info(f"📝 Rendering captioned video to: {output_path}")
+            
+            # Write the video file
+            final_video.write_videofile(
+                output_path,
+                codec='libx264',
+                audio_codec='aac',
+                temp_audiofile=f'{output_path}.temp-audio.m4a',
+                remove_temp=True,
+                fps=video.fps
+            )
+            
+            # Clean up
+            video.close()
+            final_video.close()
+            
+            logger.info(f"✅ Captioned video created: {output_path}")
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Failed to add captions to video: {e}")
+            raise Exception(f"Caption generation failed: {e}")
     
     def _download_video(self, download_url: str, output_path: str) -> None:
         """Download the generated video from the provided URL"""

@@ -2,7 +2,11 @@
 Script to generate a hot take video for a given session.
 
 Usage:
-    python scripts/generate_hot_take_video.py <session_id>
+    python scripts/generate_hot_take_video.py <session_id> [hot_take_number]
+    
+Arguments:
+    session_id: The LiveKit session ID
+    hot_take_number: Optional. Which hot take to generate (1 or 2). Default: 1
 """
 
 import os
@@ -40,10 +44,23 @@ def load_env():
 
 def main():
     if len(sys.argv) < 2:
-        logger.error("❌ Usage: python scripts/generate_hot_take_video.py <session_id>")
+        logger.error("❌ Usage: python scripts/generate_hot_take_video.py <session_id> [hot_take_number]")
+        logger.error("   hot_take_number: Optional. Which hot take to generate (1 or 2). Default: 1")
         sys.exit(1)
     
     session_id = sys.argv[1]
+    
+    # Get hot_take_number from arguments (default to 1)
+    hot_take_number = 1
+    if len(sys.argv) >= 3:
+        try:
+            hot_take_number = int(sys.argv[2])
+            if hot_take_number not in [1, 2]:
+                logger.error("❌ hot_take_number must be 1 or 2")
+                sys.exit(1)
+        except ValueError:
+            logger.error("❌ hot_take_number must be an integer (1 or 2)")
+            sys.exit(1)
     
     # Load environment variables
     load_env()
@@ -60,27 +77,28 @@ def main():
     
     # Initialize the service
     service = HotTakeVideoGenerationService(
-        supabase_client=supabase,
-        output_dir=str(Path(__file__).parent.parent)  # Save to backend directory
+        supabase_client=supabase
     )
     
     try:
-        logger.info(f"🎬 Starting hot take video generation for session: {session_id}")
+        logger.info(f"🎬 Starting hot take #{hot_take_number} video generation for session: {session_id}")
         logger.info("=" * 60)
         
         result = service.generate_hot_take_video(
             session_id=session_id,
             text_prompt="professional interview conversation",
             aspect_ratio="16:9",
-            resolution="720p"
+            resolution="720p",
+            hot_take_number=hot_take_number
         )
         
         logger.info("=" * 60)
         logger.info("🎉 SUCCESS!")
         logger.info(f"Session ID: {result['session_id']}")
         logger.info(f"User ID: {result['user_id']}")
-        logger.info(f"Video saved to: {result['video_path']}")
-        logger.info(f"Hot take: {result['hot_take_text'][:100]}...")
+        logger.info(f"Hot take #{result['hot_take_number']}: {result['hot_take_text'][:100]}...")
+        logger.info(f"Storage path: {result['storage_path']}")
+        logger.info(f"Local video path: {result['video_path']}")
         logger.info("=" * 60)
         
     except Exception as e:

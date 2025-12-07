@@ -78,19 +78,34 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
             # No cleanup needed here since we want to test updating existing records
             logger.debug("Skipping user_profiles cleanup - profile_aggregation updates existing records")
         
-		# Hedra avatar generation cleanup
-		if not task_name or task_name == "hedra_avatar_generation":
-			response = supabase.table("user_avatar_images").delete().eq("session_id", session_id).execute()
+	# Hedra avatar generation cleanup
+	if not task_name or task_name == "hedra_avatar_generation":
+		response = supabase.table("user_avatar_images").delete().eq("session_id", session_id).execute()
+		if response.data:
+			logger.debug(f"Deleted {len(response.data)} record(s) from user_avatar_images")
+	
+	# Voice cloning cleanup
+	# Voice cloning creates temporary files but doesn't write to database (yet)
+	# No cleanup needed here - files are temporary and will be cleaned up by the OS
+	if not task_name or task_name == "voice_cloning":
+		logger.debug("Voice cloning cleanup - no database records to delete")
+	
+	# Hot take video cleanup
+	# Videos are stored in Supabase storage and references are in interview_call_analysis
+	# Clear the hot_take_video_1 and hot_take_video_2 columns
+	if not task_name or task_name in ["hot_take_video_1", "hot_take_video_2"]:
+		update_data = {}
+		if not task_name or task_name == "hot_take_video_1":
+			update_data["hot_take_video_1"] = None
+		if not task_name or task_name == "hot_take_video_2":
+			update_data["hot_take_video_2"] = None
+		
+		if update_data:
+			response = supabase.table("interview_call_analysis").update(update_data).eq("session_id", session_id).execute()
 			if response.data:
-				logger.debug(f"Deleted {len(response.data)} record(s) from user_avatar_images")
-		
-		# Voice cloning cleanup
-		# Voice cloning creates temporary files but doesn't write to database (yet)
-		# No cleanup needed here - files are temporary and will be cleaned up by the OS
-		if not task_name or task_name == "voice_cloning":
-			logger.debug("Voice cloning cleanup - no database records to delete")
-		
-		# Add cleanup for future tasks here as they're implemented
+				logger.debug(f"Cleared hot take video references from interview_call_analysis")
+	
+	# Add cleanup for future tasks here as they're implemented
         
         logger.debug("Cleanup complete")
         
@@ -172,6 +187,34 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
 				"voice_cloning": result
 			}
 		}
+	elif task_name == "hot_take_video_1":
+		result = await orchestrator._run_with_retry(
+			task_name="hot_take_video_1",
+			task_func=orchestrator._generate_hot_take_video_1,
+			session_id=session_id,
+			max_retries=3
+		)
+		return {
+			"session_id": session_id,
+			"status": "success",
+			"tasks": {
+				"hot_take_video_1": result
+			}
+		}
+	elif task_name == "hot_take_video_2":
+		result = await orchestrator._run_with_retry(
+			task_name="hot_take_video_2",
+			task_func=orchestrator._generate_hot_take_video_2,
+			session_id=session_id,
+			max_retries=3
+		)
+		return {
+			"session_id": session_id,
+			"status": "success",
+			"tasks": {
+				"hot_take_video_2": result
+			}
+		}
 	else:
 		logger.error(f"Unknown task: {task_name}")
 		logger.info("Available tasks:")
@@ -179,6 +222,8 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
 		logger.info("  - profile_aggregation")
 		logger.info("  - hedra_avatar_generation")
 		logger.info("  - voice_cloning")
+		logger.info("  - hot_take_video_1")
+		logger.info("  - hot_take_video_2")
 		logger.info("  (more tasks will be added as they're implemented)")
 		sys.exit(1)
 
@@ -277,14 +322,18 @@ def print_results(results: dict):
                 task_summary["sessions_analyzed"] = result.get("record_count")
                 task_summary["consolidated_myers_briggs"] = result.get("synthesis", {}).get("consolidated_myers_briggs")
                 
-			elif task_name == "hedra_avatar_generation":
-				task_summary["record_id"] = result.get("record_id")
-				task_summary["hedra_avatar_id"] = result.get("hedra_avatar_id")
-				task_summary["picture_id"] = result.get("picture_id")
-				
-			elif task_name == "voice_cloning":
-				task_summary["recording_id"] = result.get("recording_id")
-				task_summary["processed_file_path"] = result.get("processed_file_path")
+		elif task_name == "hedra_avatar_generation":
+			task_summary["record_id"] = result.get("record_id")
+			task_summary["hedra_avatar_id"] = result.get("hedra_avatar_id")
+			task_summary["picture_id"] = result.get("picture_id")
+			
+		elif task_name == "voice_cloning":
+			task_summary["recording_id"] = result.get("recording_id")
+			task_summary["processed_file_path"] = result.get("processed_file_path")
+			
+		elif task_name == "hot_take_video_1" or task_name == "hot_take_video_2":
+			task_summary["storage_path"] = result.get("storage_path")
+			task_summary["hot_take_text_preview"] = result.get("hot_take_text", "")[:100] + "..." if result.get("hot_take_text") else None
                 
         elif task_result.get("status") == "error":
             task_summary["error"] = task_result.get("error")
@@ -321,6 +370,12 @@ Examples:
   
   # Run only voice cloning
   python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task voice_cloning
+  
+  # Run only hot take video #1 generation
+  python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task hot_take_video_1
+  
+  # Run only hot take video #2 generation
+  python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task hot_take_video_2
   
   # Run direct avatar generation (e.g., user uploads from profile)
   python sandbox_orchestrator.py --user-id abc123 --picture-id profile-pic.jpg --session-id RM_7Vn7ZtZWQxZX

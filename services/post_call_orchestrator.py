@@ -11,6 +11,7 @@ from services.transcript_processing import TranscriptProcessor
 from services.profile_aggregation import ProfileAggregator
 from services.hedra_avatar_generation import HedraAvatarGenerator
 from services.clone_voice import VoiceCloningService
+from services.hot_take_video_generation import HotTakeVideoGenerationService
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class PostCallOrchestrator:
 		self.profile_aggregator = ProfileAggregator(supabase_client, anthropic_api_key)
 		self.hedra_avatar_generator = HedraAvatarGenerator(supabase_client, hedra_api_key)
 		self.voice_cloning_service = VoiceCloningService(supabase_client, cartesia_api_key)
+		self.hot_take_video_service = HotTakeVideoGenerationService(supabase_client, cartesia_api_key, hedra_api_key)
 	
 	async def process_call_completion(self, session_id: str) -> Dict[str, Any]:
 		"""
@@ -46,9 +48,7 @@ class PostCallOrchestrator:
 		- User profile aggregation
 		- Hedra avatar generation from user image
 		- Voice recording processing for voice cloning
-		
-		Future tasks can be added here:
-		- Hot take video generation
+		- Hot take video generation (2 videos)
 		
 		Args:
 			session_id: The LiveKit session ID
@@ -92,23 +92,32 @@ class PostCallOrchestrator:
 			)
 			results["tasks"]["hedra_avatar_generation"] = hedra_avatar_result
 			
-			# Task 4: Process voice recording for cloning
-			voice_cloning_result = await self._run_with_retry(
-				task_name="voice_cloning",
-				task_func=self._process_voice_recording,
-				session_id=session_id,
-				max_retries=3
-			)
-			results["tasks"]["voice_cloning"] = voice_cloning_result
-			
-			# Future tasks can be added here
-			# Example:
-			# hot_take_result = await self._run_with_retry(
-			#     task_name="hot_take_generation",
-			#     task_func=self._generate_hot_take,
-			#     session_id=session_id
-			# )
-			# results["tasks"]["hot_take_generation"] = hot_take_result
+		# Task 4: Process voice recording for cloning
+		voice_cloning_result = await self._run_with_retry(
+			task_name="voice_cloning",
+			task_func=self._process_voice_recording,
+			session_id=session_id,
+			max_retries=3
+		)
+		results["tasks"]["voice_cloning"] = voice_cloning_result
+		
+		# Task 5: Generate hot take video #1
+		hot_take_1_result = await self._run_with_retry(
+			task_name="hot_take_video_1",
+			task_func=self._generate_hot_take_video_1,
+			session_id=session_id,
+			max_retries=3
+		)
+		results["tasks"]["hot_take_video_1"] = hot_take_1_result
+		
+		# Task 6: Generate hot take video #2
+		hot_take_2_result = await self._run_with_retry(
+			task_name="hot_take_video_2",
+			task_func=self._generate_hot_take_video_2,
+			session_id=session_id,
+			max_retries=3
+		)
+		results["tasks"]["hot_take_video_2"] = hot_take_2_result
 			
 			logger.info(f"Post-call orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
 			
@@ -276,17 +285,35 @@ class PostCallOrchestrator:
 		"""
 		return self.voice_cloning_service.process_voice_recording(session_id)
 	
-	# Future task methods can be added below:
+	def _generate_hot_take_video_1(self, session_id: str) -> dict:
+		"""
+		Generate hot take video #1 from interview analysis.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			dict: Hot take video generation result
+		"""
+		return self.hot_take_video_service.generate_hot_take_video(
+			session_id=session_id,
+			hot_take_number=1
+		)
 	
-	# async def _is_first_call(self, session_id: str) -> bool:
-	# 	"""Check if this is the user's first call"""
-	# 	# Implementation here
-	# 	pass
-	
-	# async def _generate_hot_take(self, session_id: str) -> dict:
-	# 	"""Generate hot take video from interview analysis"""
-	# 	# Implementation here
-	# 	pass
+	def _generate_hot_take_video_2(self, session_id: str) -> dict:
+		"""
+		Generate hot take video #2 from interview analysis.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			dict: Hot take video generation result
+		"""
+		return self.hot_take_video_service.generate_hot_take_video(
+			session_id=session_id,
+			hot_take_number=2
+		)
 	
 
 

@@ -14,4 +14,5 @@ dependencies = [
     "numpy>=1.24.0",
     "audioop-lts>=0.2.1",
     "cartesia>=1.0.0",
+    "moviepy>=1.0.3",
 ]
