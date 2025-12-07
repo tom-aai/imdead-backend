@@ -1,12 +1,20 @@
 """
 Script to generate a hot take video for a given session.
 
+This script generates the base video WITHOUT captions. It saves:
+- Video file (.mp4)
+- Audio file (.wav)
+- Timestamps file (.json)
+
+To add captions, use scripts/add_captions_to_video.py after running this script.
+
 Usage:
-    python scripts/generate_hot_take_video.py <session_id> [hot_take_number]
+    python scripts/generate_hot_take_video.py <session_id> [hot_take_number] [output_dir]
     
 Arguments:
     session_id: The LiveKit session ID
     hot_take_number: Optional. Which hot take to generate (1 or 2). Default: 1
+    output_dir: Optional. Directory to save outputs. Default: current directory
 """
 
 import os
@@ -44,8 +52,9 @@ def load_env():
 
 def main():
     if len(sys.argv) < 2:
-        logger.error("❌ Usage: python scripts/generate_hot_take_video.py <session_id> [hot_take_number]")
+        logger.error("❌ Usage: python scripts/generate_hot_take_video.py <session_id> [hot_take_number] [output_dir]")
         logger.error("   hot_take_number: Optional. Which hot take to generate (1 or 2). Default: 1")
+        logger.error("   output_dir: Optional. Directory to save outputs. Default: current directory")
         sys.exit(1)
     
     session_id = sys.argv[1]
@@ -61,6 +70,11 @@ def main():
         except ValueError:
             logger.error("❌ hot_take_number must be an integer (1 or 2)")
             sys.exit(1)
+    
+    # Get output_dir from arguments (default to None, which means current dir)
+    output_dir = None
+    if len(sys.argv) >= 4:
+        output_dir = sys.argv[3]
     
     # Load environment variables
     load_env()
@@ -89,7 +103,8 @@ def main():
             text_prompt="professional interview conversation",
             aspect_ratio="16:9",
             resolution="720p",
-            hot_take_number=hot_take_number
+            hot_take_number=hot_take_number,
+            output_dir=output_dir
         )
         
         logger.info("=" * 60)
@@ -97,8 +112,12 @@ def main():
         logger.info(f"Session ID: {result['session_id']}")
         logger.info(f"User ID: {result['user_id']}")
         logger.info(f"Hot take #{result['hot_take_number']}: {result['hot_take_text'][:100]}...")
-        logger.info(f"Storage path: {result['storage_path']}")
-        logger.info(f"Local video path: {result['video_path']}")
+        logger.info(f"Video path: {result['video_path']}")
+        logger.info(f"Audio path: {result['audio_path']}")
+        logger.info(f"Timestamps path: {result['timestamps_path']}")
+        logger.info("")
+        logger.info("📝 To add captions, run:")
+        logger.info(f"   python scripts/add_captions_to_video.py --base {os.path.splitext(result['video_path'])[0]}")
         logger.info("=" * 60)
         
     except Exception as e:
