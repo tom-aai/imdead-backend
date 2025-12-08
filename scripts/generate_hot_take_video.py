@@ -1,20 +1,19 @@
 """
 Script to generate a hot take video for a given session.
 
-This script generates the base video WITHOUT captions. It saves:
-- Video file (.mp4)
+This script generates a hot take video WITH captions by default. It saves:
+- Video file (.mp4) with word-by-word highlighted captions
 - Audio file (.wav)
 - Timestamps file (.json)
 
-To add captions, use scripts/add_captions_to_video.py after running this script.
-
 Usage:
-    python scripts/generate_hot_take_video.py <session_id> [hot_take_number] [output_dir]
+    python scripts/generate_hot_take_video.py <session_id> [hot_take_number] [output_dir] [--no-captions]
     
 Arguments:
     session_id: The LiveKit session ID
     hot_take_number: Optional. Which hot take to generate (1 or 2). Default: 1
     output_dir: Optional. Directory to save outputs. Default: current directory
+    --no-captions: Optional. Skip adding captions to the video
 """
 
 import os
@@ -52,12 +51,19 @@ def load_env():
 
 def main():
     if len(sys.argv) < 2:
-        logger.error("❌ Usage: python scripts/generate_hot_take_video.py <session_id> [hot_take_number] [output_dir]")
+        logger.error("❌ Usage: python scripts/generate_hot_take_video.py <session_id> [hot_take_number] [output_dir] [--no-captions]")
         logger.error("   hot_take_number: Optional. Which hot take to generate (1 or 2). Default: 1")
         logger.error("   output_dir: Optional. Directory to save outputs. Default: current directory")
+        logger.error("   --no-captions: Optional. Skip adding captions to the video")
         sys.exit(1)
     
     session_id = sys.argv[1]
+    
+    # Check for --no-captions flag
+    add_captions = True
+    if '--no-captions' in sys.argv:
+        add_captions = False
+        sys.argv.remove('--no-captions')
     
     # Get hot_take_number from arguments (default to 1)
     hot_take_number = 1
@@ -96,6 +102,7 @@ def main():
     
     try:
         logger.info(f"🎬 Starting hot take #{hot_take_number} video generation for session: {session_id}")
+        logger.info(f"   Captions: {'Enabled ✅' if add_captions else 'Disabled ❌'}")
         logger.info("=" * 60)
         
         result = service.generate_hot_take_video(
@@ -104,7 +111,8 @@ def main():
             aspect_ratio="16:9",
             resolution="720p",
             hot_take_number=hot_take_number,
-            output_dir=output_dir
+            output_dir=output_dir,
+            add_captions=add_captions
         )
         
         logger.info("=" * 60)
@@ -115,9 +123,13 @@ def main():
         logger.info(f"Video path: {result['video_path']}")
         logger.info(f"Audio path: {result['audio_path']}")
         logger.info(f"Timestamps path: {result['timestamps_path']}")
-        logger.info("")
-        logger.info("📝 To add captions, run:")
-        logger.info(f"   python scripts/add_captions_to_video.py --base {os.path.splitext(result['video_path'])[0]}")
+        logger.info(f"Captions added: {'Yes ✅' if result.get('captions_added') else 'No ❌'}")
+        
+        if not result.get('captions_added'):
+            logger.info("")
+            logger.info("📝 To add captions manually, run:")
+            logger.info(f"   python scripts/add_captions_to_video.py --video {result['video_path']} --audio {result['audio_path']} --timestamps {result['timestamps_path']}")
+        
         logger.info("=" * 60)
         
     except Exception as e:

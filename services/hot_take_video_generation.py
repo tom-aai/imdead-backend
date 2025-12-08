@@ -4,6 +4,7 @@ Hot take video generation service.
 This service generates videos from hot takes:
 1. Generates audio from hot_take_x text using Cartesia
 2. Uses the Hedra avatar to create a video with the audio
+3. Optionally adds captions using the CaptionGenerator service
 """
 
 import os
@@ -16,7 +17,9 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 import requests
 from cartesia import Cartesia
-from moviepy import VideoFileClip, TextClip, CompositeVideoClip
+
+# Import CaptionGenerator for adding captions
+from .caption_generator import CaptionGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -64,35 +67,9 @@ class HotTakeVideoGenerationService:
         
         if not self.hedra_api_key:
             raise ValueError("HEDRA_API_KEY is required")
-    
-    def _get_font_path(self) -> str:
-        """
-        Get the path to a suitable font for captions.
         
-        On macOS, tries to find Arial Bold or falls back to other available fonts.
-        
-        Returns:
-            str: Path to a font file that can be used with TextClip
-        """
-        # List of font paths to try (in order of preference)
-        font_paths = [
-            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-            "/Library/Fonts/Arial Bold.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",
-            "/System/Library/Fonts/Supplemental/Helvetica.ttc",
-            "/System/Library/Fonts/SFNSDisplay.ttf",
-            "/System/Library/Fonts/SFNS.ttf",
-        ]
-        
-        for font_path in font_paths:
-            if os.path.exists(font_path):
-                logger.info(f"Using font: {font_path}")
-                return font_path
-        
-        # If no fonts found, raise an error
-        raise FileNotFoundError(
-            "Could not find a suitable font file. Please ensure Arial Bold or Helvetica is installed."
-        )
+        # Initialize CaptionGenerator for adding captions
+        self.caption_generator = CaptionGenerator()
     
     def generate_hot_take_video(
         self,
@@ -101,7 +78,8 @@ class HotTakeVideoGenerationService:
         aspect_ratio: str = "16:9",
         resolution: str = "720p",
         hot_take_number: int = 1,
-        output_dir: str = None
+        output_dir: str = None,
+        add_captions: bool = True
     ) -> dict:
         """
         Generate a video from a hot take and save video, audio, and timestamps locally.
@@ -112,7 +90,8 @@ class HotTakeVideoGenerationService:
         3. Get voice_id from user_profiles table
         4. Generate audio from hot_take text using Cartesia (with word timestamps)
         5. Generate video using Hedra avatar and audio
-        6. Save video, audio, and timestamps locally for caption generation
+        6. Optionally add captions with word-by-word highlighting (using CaptionGenerator)
+        7. Save video, audio, and timestamps locally
         
         Args:
             session_id: The LiveKit session ID
@@ -121,6 +100,7 @@ class HotTakeVideoGenerationService:
             resolution: Video resolution ("540p", "720p")
             hot_take_number: Which hot take to use (1 or 2)
             output_dir: Directory to save outputs (defaults to current working directory)
+            add_captions: Whether to add captions to the video (default: True)
             
         Returns:
             dict: Generation result with paths to video, audio, and timestamps files
@@ -198,17 +178,6 @@ class HotTakeVideoGenerationService:
         # Step 6: Save all outputs to the specified directory
         base_filename = f"hot_take_{hot_take_number}_{session_id}"
         
-        # Save video
-        video_path = os.path.join(output_dir, f"{base_filename}.mp4")
-        if temp_video_path != video_path:
-            import shutil
-            shutil.copy2(temp_video_path, video_path)
-            # Clean up temp video
-            try:
-                os.unlink(temp_video_path)
-            except Exception as e:
-                logger.warning(f"Failed to clean up temp video: {e}")
-        
         # Save audio (move from current directory to output_dir if needed)
         audio_filename = f"{base_filename}_audio.wav"
         audio_path = os.path.join(output_dir, audio_filename)
@@ -226,21 +195,130 @@ class HotTakeVideoGenerationService:
         with open(timestamps_path, 'w') as f:
             json.dump(word_timestamps, f, indent=2)
         
-        logger.info(f"💾 Saved outputs:")
+        # Step 7: Optionally add captions using CaptionGenerator
+        if add_captions:
+            logger.info(f"\n{'='*80}")
+            logger.info(f"🎨 ADDING CAPTIONS TO VIDEO")
+            logger.info(f"{'='*80}")
+            
+            try:
+                # Use CaptionGenerator to add captions with word-by-word highlighting
+                captioned_video_path = self.caption_generator.add_captions_to_video(
+                    video_path=temp_video_path,
+                    audio_path=audio_path,
+                    timestamps_path=timestamps_path,
+                    output_path=None  # Will auto-generate output path
+                )
+                
+                # Move the captioned video to the final output location
+                video_path = os.path.join(output_dir, f"{base_filename}.mp4")
+                if captioned_video_path != video_path:
+                    import shutil
+                    shutil.copy2(captioned_video_path, video_path)
+                    # Clean up temp captioned video
+                    try:
+                        os.unlink(captioned_video_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up temp captioned video: {e}")
+                
+                # Clean up original temp video (no longer needed)
+                try:
+                    os.unlink(temp_video_path)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temp video: {e}")
+                
+                logger.info(f"✅ Captions added successfully!")
+                message = f"Hot take #{hot_take_number} video generated with captions"
+                
+            except Exception as e:
+                logger.error(f"Failed to add captions: {e}")
+                logger.warning(f"Falling back to video without captions")
+                
+                # Save video without captions
+                video_path = os.path.join(output_dir, f"{base_filename}.mp4")
+                if temp_video_path != video_path:
+                    import shutil
+                    shutil.copy2(temp_video_path, video_path)
+                    try:
+                        os.unlink(temp_video_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to clean up temp video: {e}")
+                
+                message = f"Hot take #{hot_take_number} video generated (captions failed, video without captions)"
+        else:
+            # Save video without captions
+            video_path = os.path.join(output_dir, f"{base_filename}.mp4")
+            if temp_video_path != video_path:
+                import shutil
+                shutil.copy2(temp_video_path, video_path)
+                # Clean up temp video
+                try:
+                    os.unlink(temp_video_path)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temp video: {e}")
+            
+            message = f"Hot take #{hot_take_number} video generated (without captions)"
+        
+        logger.info(f"\n💾 Saved outputs:")
         logger.info(f"  - Video: {video_path}")
         logger.info(f"  - Audio: {audio_path}")
         logger.info(f"  - Timestamps: {timestamps_path}")
         
+        # Step 8: Upload video to Supabase storage and update database
+        storage_path = None
+        try:
+            logger.info(f"\n{'='*80}")
+            logger.info(f"☁️ UPLOADING TO SUPABASE")
+            logger.info(f"{'='*80}")
+            
+            # Upload the final video to Supabase storage
+            storage_path = self._upload_video_to_storage(
+                video_path=video_path,
+                user_id=user_id,
+                session_id=session_id,
+                hot_take_number=hot_take_number
+            )
+            
+            # Update the database with the storage path
+            self._update_video_filename_in_db(
+                session_id=session_id,
+                storage_path=storage_path,
+                hot_take_number=hot_take_number
+            )
+            
+            logger.info(f"✅ Video uploaded to Supabase storage: {storage_path}")
+            logger.info(f"✅ Database updated with video path")
+            
+            # Step 9: Clean up local files after successful upload
+            logger.info(f"\n🧹 Cleaning up local files...")
+            files_to_cleanup = [video_path, audio_path, timestamps_path]
+            for file_path_to_delete in files_to_cleanup:
+                try:
+                    if os.path.exists(file_path_to_delete):
+                        os.unlink(file_path_to_delete)
+                        logger.info(f"  ✅ Deleted: {os.path.basename(file_path_to_delete)}")
+                except Exception as cleanup_error:
+                    logger.warning(f"  ⚠️  Failed to delete {file_path_to_delete}: {cleanup_error}")
+            
+            logger.info(f"✅ Local files cleaned up")
+            
+        except Exception as e:
+            logger.error(f"Failed to upload video to Supabase: {e}")
+            logger.warning(f"Video saved locally but not uploaded to cloud storage")
+            logger.warning(f"Local files NOT deleted due to upload failure")
+        
         return {
             "status": "success",
-            "message": f"Hot take #{hot_take_number} video generated (without captions)",
+            "message": message,
             "session_id": session_id,
             "user_id": user_id,
             "video_path": video_path,
             "audio_path": audio_path,
             "timestamps_path": timestamps_path,
             "hot_take_text": hot_take_text,
-            "hot_take_number": hot_take_number
+            "hot_take_number": hot_take_number,
+            "captions_added": add_captions,
+            "storage_path": storage_path
         }
     
     def _get_hot_take_data(self, session_id: str, hot_take_number: int = 1) -> tuple[str, str]:
@@ -779,271 +857,6 @@ class HotTakeVideoGenerationService:
         except Exception as e:
             logger.error(f"Failed to update database: {e}")
             raise Exception(f"Database update failed: {e}")
-    
-    def _group_words_into_phrases(
-        self,
-        word_timestamps: List[Dict],
-        words_per_phrase: int = 3
-    ) -> List[List[Dict]]:
-        """
-        Group words into phrases of 2-3 words for caption display.
-        
-        Args:
-            word_timestamps: List of word timestamp dicts
-            words_per_phrase: Number of words per phrase (default 3)
-            
-        Returns:
-            List of phrases, where each phrase is a list of word dicts
-        """
-        phrases = []
-        for i in range(0, len(word_timestamps), words_per_phrase):
-            phrase = word_timestamps[i:i + words_per_phrase]
-            phrases.append(phrase)
-        
-        return phrases
-    
-    def _create_highlighted_caption_clip(
-        self,
-        phrase_words: List[Dict],
-        current_word_index: int,
-        video_width: int,
-        video_height: int,
-        start_time: float,
-        duration: float
-    ) -> TextClip:
-        """
-        Create a caption clip with word highlighting.
-        
-        Args:
-            phrase_words: List of words in the current phrase
-            current_word_index: Index of the word to highlight
-            video_width: Width of the video
-            video_height: Height of the video
-            start_time: When this caption should appear
-            duration: How long this caption should last
-            
-        Returns:
-            TextClip with highlighted word
-        """
-        # Build the caption text with color markup
-        caption_parts = []
-        for i, word_data in enumerate(phrase_words):
-            word = word_data['word']
-            if i == current_word_index:
-                # Current word - highlighted in yellow
-                caption_parts.append(word)
-            else:
-                # Other words - white
-                caption_parts.append(word)
-        
-        caption_text = ' '.join(caption_parts)
-        
-        # Create text clip with styling
-        # Note: MoviePy doesn't support inline color changes easily,
-        # so we'll create overlapping clips for the highlight effect
-        txt_clip = TextClip(
-            caption_text,
-            fontsize=70,
-            color='white',
-            font=self._get_font_path(),
-            stroke_color='black',
-            stroke_width=3,
-            method='caption',
-            size=(video_width * 0.9, None)
-        )
-        
-        # Position at bottom of video (10% from bottom)
-        txt_clip = txt_clip.with_position(('center', video_height * 0.85))
-        txt_clip = txt_clip.with_start(start_time)
-        txt_clip = txt_clip.with_duration(duration)
-        
-        return txt_clip
-    
-    def _create_word_highlight_clips(
-        self,
-        word_timestamps: List[Dict],
-        video_width: int,
-        video_height: int
-    ) -> List[TextClip]:
-        """
-        Create caption clips with word-by-word highlighting effect.
-        
-        Args:
-            word_timestamps: List of word timestamp dicts
-            video_width: Width of the video
-            video_height: Height of the video
-            
-        Returns:
-            List of TextClip objects for compositing
-        """
-        caption_clips = []
-        
-        # Group words into phrases
-        phrases = self._group_words_into_phrases(word_timestamps)
-        
-        logger.info(f"🎬 Creating {len(phrases)} caption phrases from {len(word_timestamps)} words")
-        logger.info(f"📐 Video dimensions: {video_width}x{video_height}")
-        
-        for phrase_idx, phrase_words in enumerate(phrases):
-            # Determine the time span for this phrase
-            phrase_start = phrase_words[0]['start']
-            phrase_end = phrase_words[-1]['end']
-            phrase_duration = phrase_end - phrase_start
-            
-            # Create base text (all words in white) - ONE clip for the entire phrase
-            phrase_text = ' '.join([w['word'] for w in phrase_words])
-            
-            logger.info(f"\n📝 Phrase {phrase_idx + 1}/{len(phrases)}: '{phrase_text}'")
-            logger.info(f"   ⏱️  Phrase timing: start={phrase_start:.3f}s, end={phrase_end:.3f}s, duration={phrase_duration:.3f}s")
-            logger.info(f"   📊 Words in phrase: {len(phrase_words)}")
-            
-            # MoviePy 2.x uses text parameter instead of positional
-            base_clip = TextClip(
-                text=phrase_text,
-                font_size=70,
-                color='white',
-                font=self._get_font_path(),
-                stroke_color='black',
-                stroke_width=3,
-                size=(int(video_width * 0.9), None)
-            )
-            base_clip = base_clip.with_position(('center', int(video_height * 0.85)))
-            base_clip = base_clip.with_start(phrase_start)
-            base_clip = base_clip.with_duration(phrase_duration)
-            
-            logger.info(f"   ✅ Created base clip (WHITE) - start={phrase_start:.3f}s, duration={phrase_duration:.3f}s")
-            caption_clips.append(base_clip)
-            
-            # Create a highlight clip for each word in the phrase
-            for i, word_data in enumerate(phrase_words):
-                word_start = word_data['start']
-                word_end = word_data['end']
-                word_duration = word_end - word_start
-                
-                # Create highlight overlay for current word
-                highlighted_word = word_data['word']
-                
-                logger.info(f"      🟡 Word {i + 1}/{len(phrase_words)}: '{highlighted_word}'")
-                logger.info(f"         ⏱️  Timing: start={word_start:.3f}s, end={word_end:.3f}s, duration={word_duration:.3f}s")
-                
-                # Calculate position offset for the highlighted word
-                words_before = ' '.join([w['word'] for w in phrase_words[:i]])
-                
-                highlight_clip = TextClip(
-                    text=highlighted_word,
-                    font_size=70,
-                    color='yellow',
-                    font=self._get_font_path(),
-                    stroke_color='black',
-                    stroke_width=3
-                )
-                
-                # Position the highlight over the correct word
-                # This is approximate - calculating exact x position is complex
-                base_x_offset = len(words_before) * 35 if words_before else 0
-                x_pos = (video_width // 2) - (len(phrase_text) * 20) + base_x_offset
-                y_pos = int(video_height * 0.85)
-                
-                logger.info(f"         📍 Position: x={x_pos}, y={y_pos} (offset={base_x_offset}, words_before='{words_before}')")
-                
-                highlight_clip = highlight_clip.with_position((x_pos, y_pos))
-                highlight_clip = highlight_clip.with_start(word_start)
-                highlight_clip = highlight_clip.with_duration(word_duration)
-                
-                logger.info(f"         ✅ Created highlight clip (YELLOW)")
-                caption_clips.append(highlight_clip)
-        
-        logger.info(f"\n🎉 Total caption clips created: {len(caption_clips)}")
-        logger.info(f"   📊 Expected: {len(phrases)} base clips + {len(word_timestamps)} highlight clips = {len(phrases) + len(word_timestamps)}")
-        
-        return caption_clips
-    
-    def _add_captions_to_video(
-        self,
-        video_path: str,
-        word_timestamps: List[Dict],
-        session_id: str,
-        hot_take_number: int
-    ) -> str:
-        """
-        Add word-highlighted captions to video using MoviePy.
-        
-        Args:
-            video_path: Path to the video file
-            word_timestamps: List of word timestamp dicts from Cartesia
-            session_id: Session ID for naming the output file
-            hot_take_number: Which hot take this is for
-            
-        Returns:
-            str: Path to the captioned video file
-            
-        Raises:
-            Exception: If caption generation fails
-        """
-        try:
-            logger.info(f"🎬 Adding captions to video: {video_path}")
-            logger.info(f"📊 Total word timestamps received: {len(word_timestamps)}")
-            
-            # Log first few word timestamps for debugging
-            logger.info(f"🔍 First 5 word timestamps:")
-            for i, wt in enumerate(word_timestamps[:5]):
-                logger.info(f"   {i + 1}. '{wt.get('word')}' - start={wt.get('start'):.3f}s, end={wt.get('end'):.3f}s")
-            
-            # Load the video
-            video = VideoFileClip(video_path)
-            video_width, video_height = video.size
-            video_duration = video.duration
-            
-            logger.info(f"📹 Video info:")
-            logger.info(f"   - Dimensions: {video_width}x{video_height}")
-            logger.info(f"   - Duration: {video_duration:.3f}s")
-            logger.info(f"   - FPS: {video.fps}")
-            
-            # Create caption clips
-            caption_clips = self._create_word_highlight_clips(
-                word_timestamps,
-                video_width,
-                video_height
-            )
-            
-            logger.info(f"\n✅ Created {len(caption_clips)} total caption clips")
-            
-            # Composite captions onto video
-            logger.info(f"🎞️  Compositing captions onto video...")
-            final_video = CompositeVideoClip([video] + caption_clips)
-            
-            # Generate output path
-            output_path = os.path.join(
-                tempfile.gettempdir(),
-                f"hot_take_{hot_take_number}_captioned_{session_id}.mp4"
-            )
-            
-            logger.info(f"📝 Rendering captioned video to: {output_path}")
-            logger.info(f"⏳ This may take a few minutes...")
-            
-            # Write the video file
-            final_video.write_videofile(
-                output_path,
-                codec='libx264',
-                audio_codec='aac',
-                temp_audiofile=f'{output_path}.temp-audio.m4a',
-                remove_temp=True,
-                fps=video.fps
-            )
-            
-            # Clean up
-            video.close()
-            final_video.close()
-            
-            logger.info(f"✅ Captioned video created: {output_path}")
-            
-            return output_path
-            
-        except Exception as e:
-            logger.error(f"Failed to add captions to video: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            raise Exception(f"Caption generation failed: {e}")
     
     def _download_video(self, download_url: str, output_path: str) -> None:
         """Download the generated video from the provided URL"""
