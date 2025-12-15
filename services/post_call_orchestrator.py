@@ -92,32 +92,32 @@ class PostCallOrchestrator:
 			)
 			results["tasks"]["hedra_avatar_generation"] = hedra_avatar_result
 			
-		# Task 4: Process voice recording for cloning
-		voice_cloning_result = await self._run_with_retry(
-			task_name="voice_cloning",
-			task_func=self._process_voice_recording,
-			session_id=session_id,
-			max_retries=3
-		)
-		results["tasks"]["voice_cloning"] = voice_cloning_result
-		
-		# Task 5: Generate hot take video #1
-		hot_take_1_result = await self._run_with_retry(
-			task_name="hot_take_video_1",
-			task_func=self._generate_hot_take_video_1,
-			session_id=session_id,
-			max_retries=3
-		)
-		results["tasks"]["hot_take_video_1"] = hot_take_1_result
-		
-		# Task 6: Generate hot take video #2
-		hot_take_2_result = await self._run_with_retry(
-			task_name="hot_take_video_2",
-			task_func=self._generate_hot_take_video_2,
-			session_id=session_id,
-			max_retries=3
-		)
-		results["tasks"]["hot_take_video_2"] = hot_take_2_result
+			# Task 4: Process voice recording for cloning
+			voice_cloning_result = await self._run_with_retry(
+				task_name="voice_cloning",
+				task_func=self._process_voice_recording,
+				session_id=session_id,
+				max_retries=3
+			)
+			results["tasks"]["voice_cloning"] = voice_cloning_result
+			
+			# Task 5: Generate hot take video #1
+			hot_take_1_result = await self._run_with_retry(
+				task_name="hot_take_video_1",
+				task_func=self._generate_hot_take_video_1,
+				session_id=session_id,
+				max_retries=3
+			)
+			results["tasks"]["hot_take_video_1"] = hot_take_1_result
+			
+			# Task 6: Generate hot take video #2
+			hot_take_2_result = await self._run_with_retry(
+				task_name="hot_take_video_2",
+				task_func=self._generate_hot_take_video_2,
+				session_id=session_id,
+				max_retries=3
+			)
+			results["tasks"]["hot_take_video_2"] = hot_take_2_result
 			
 			logger.info(f"Post-call orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
 			

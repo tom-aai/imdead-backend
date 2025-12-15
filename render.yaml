@@ -1,0 +1,48 @@
+services:
+  # Flask API Server
+  - type: web
+    name: expertavatar-api
+    env: python
+    region: oregon
+    plan: free  # or starter ($7/month)
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PORT
+        value: 5001
+      - key: SUPABASE_URL
+        sync: false  # Set in Render dashboard
+      - key: SUPABASE_SERVICE_KEY
+        sync: false  # Set in Render dashboard
+      - key: ANTHROPIC_API_KEY
+        sync: false  # Set in Render dashboard
+      - key: HEDRA_API_KEY
+        sync: false  # Set in Render dashboard
+      - key: CARTESIA_API_KEY
+        sync: false  # Set in Render dashboard
+    healthCheckPath: /health
+
+  # Background Worker for Processing Jobs
+  - type: worker
+    name: expertavatar-worker
+    env: python
+    region: oregon
+    plan: free  # or starter ($7/month)
+    buildCommand: pip install -r requirements.txt
+    startCommand: python worker.py
+    envVars:
+      - key: SUPABASE_URL
+        sync: false  # Set in Render dashboard
+      - key: SUPABASE_SERVICE_KEY
+        sync: false  # Set in Render dashboard
+      - key: ANTHROPIC_API_KEY
+        sync: false  # Set in Render dashboard
+      - key: HEDRA_API_KEY
+        sync: false  # Set in Render dashboard
+      - key: CARTESIA_API_KEY
+        sync: false  # Set in Render dashboard
+      - key: WORKER_POLL_INTERVAL
+        value: 5  # Poll every 5 seconds
+      - key: STUCK_JOB_TIMEOUT
+        value: 30  # Reset jobs stuck for 30+ minutes
+

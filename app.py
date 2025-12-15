@@ -1,6 +1,5 @@
 import os
 import logging
-import asyncio
 import threading
 import uuid
 
@@ -8,7 +7,6 @@ from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-from services.post_call_orchestrator import PostCallOrchestrator
 from services.hedra_avatar_generation import HedraAvatarGenerator
 
 # Load environment variables: prefer .env.local, fallback to default .env if present
@@ -49,7 +47,6 @@ if not CARTESIA_API_KEY:
 	logger.warning("Cartesia API key not found - voice cloning will be unavailable")
 
 # Initialize services
-post_call_orchestrator = PostCallOrchestrator(supabase, ANTHROPIC_API_KEY, HEDRA_API_KEY, CARTESIA_API_KEY)
 hedra_avatar_generator = HedraAvatarGenerator(supabase, HEDRA_API_KEY)
 
 
@@ -65,27 +62,14 @@ def health():
 	return jsonify({"status": "healthy"})
 
 
-def _run_orchestrator_in_background(session_id: str):
-	"""
-	Run the orchestrator in a background thread.
-	This allows the endpoint to return immediately while processing continues.
-	"""
-	try:
-		result = asyncio.run(post_call_orchestrator.process_call_completion(session_id))
-		if result["status"] == "error":
-			logger.error(f"Background orchestration failed for {session_id}: {result.get('error')}")
-		else:
-			logger.info(f"Post-call orchestration completed for {session_id}")
-	except Exception as e:
-		logger.error(f"Error in background orchestration for {session_id}: {e}", exc_info=True)
-
-
 @app.route("/post-call-orchestrator", methods=["POST"])
 def post_call_orchestrator_endpoint():
 	"""
 	Orchestrate all post-call processing after a call completes.
 	Called by the LiveKit agent after saving the transcript to Supabase.
-	Returns immediately and runs orchestration in the background.
+	
+	Instead of processing immediately, this enqueues a job in the post_call_jobs table.
+	A background worker will pick up and process the job asynchronously.
 	"""
 	try:
 		# Get session_id from request
@@ -95,26 +79,75 @@ def post_call_orchestrator_endpoint():
 		if not session_id:
 			return jsonify({"error": "session_id is required"}), 400
 		
-		# Start orchestrator in background thread
-		thread = threading.Thread(
-			target=_run_orchestrator_in_background,
-			args=(session_id,),
-			daemon=True
-		)
-		thread.start()
+		# Enqueue job in Supabase
+		job_data = {
+			"session_id": session_id,
+			"status": "pending",
+			"attempts": 0,
+			"max_attempts": 3
+		}
 		
-		logger.info(f"Post-call orchestrator started for session {session_id}")
+		response = supabase.table("post_call_jobs").insert(job_data).execute()
 		
-		# Return immediately
+		if not response.data:
+			raise Exception("Failed to enqueue job")
+		
+		job_id = response.data[0].get('id')
+		
+		logger.info(f"Post-call job enqueued for session {session_id} (job_id: {job_id})")
+		
+		# Return immediately with job ID
 		return jsonify({
-			"status": "processing",
-			"message": "Post-call orchestration started in background",
-			"session_id": session_id
-		}), 200
+			"status": "queued",
+			"message": "Post-call orchestration job enqueued",
+			"session_id": session_id,
+			"job_id": job_id
+		}), 202
 		
 	except Exception as e:
 		# Handle unexpected errors
-		logger.error(f"Error starting post-call orchestration: {e}", exc_info=True)
+		logger.error(f"Error enqueuing post-call orchestration: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/jobs/<job_id>", methods=["GET"])
+def get_job_status(job_id: str):
+	"""
+	Get the status of a background job.
+	
+	Args:
+		job_id: UUID of the job
+		
+	Returns:
+		Job status information including current state, attempts, and result/error
+	"""
+	try:
+		response = supabase.table("post_call_jobs")\
+			.select("*")\
+			.eq("id", job_id)\
+			.limit(1)\
+			.execute()
+		
+		if not response.data or len(response.data) == 0:
+			return jsonify({"error": "Job not found"}), 404
+		
+		job = response.data[0]
+		
+		return jsonify({
+			"job_id": job['id'],
+			"session_id": job['session_id'],
+			"status": job['status'],
+			"attempts": job['attempts'],
+			"max_attempts": job['max_attempts'],
+			"error": job.get('error'),
+			"result": job.get('result'),
+			"created_at": job['created_at'],
+			"started_at": job.get('started_at'),
+			"completed_at": job.get('completed_at')
+		}), 200
+		
+	except Exception as e:
+		logger.error(f"Error fetching job status: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
 

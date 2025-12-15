@@ -130,18 +130,12 @@ class CaptionGenerator:
         Returns:
             str: Complete ASS subtitle file content
         """
-        logger.info(f"🎬 Generating ASS subtitles for {len(word_timestamps)} individual words")
-        logger.info(f"📐 Video dimensions: {video_width}x{video_height}")
-        
-        # Log first few word timestamps
-        logger.info(f"🔍 First 5 word timestamps:")
-        for i, wt in enumerate(word_timestamps[:5]):
-            logger.info(f"   {i + 1}. '{wt.get('word')}' - start={wt.get('start'):.3f}s, end={wt.get('end'):.3f}s, duration={(wt.get('end') - wt.get('start')):.3f}s")
+        logger.debug(f"Generating ASS subtitles for {len(word_timestamps)} words (video dimensions: {video_width}x{video_height})")
         
         # Get font path (just the filename for ASS)
         font_path = self._get_font_path()
         font_name = os.path.basename(font_path).replace('.ttf', '').replace('.ttc', '')
-        logger.info(f"🔤 Using font: {font_name}")
+        logger.debug(f"Using font: {font_name}")
         
         # ASS color format is &H00BBGGRR (BGR, not RGB)
         # White: &H00FFFFFF
@@ -170,18 +164,13 @@ class CaptionGenerator:
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
         ]
         
-        logger.info(f"\n📝 Creating karaoke effect with 2 layers:")
-        logger.info(f"   Layer 0: Static white text (chunks of ~6 words)")
-        logger.info(f"   Layer 1: Yellow word overlays (move through chunk)\n")
-        
         # Group words into chunks of ~6 words (like TikTok/Instagram/LinkedIn)
         words_per_chunk = 6
         chunks = self._group_words_into_phrases(word_timestamps, words_per_phrase=words_per_chunk)
         
-        logger.info(f"📊 Split {len(word_timestamps)} words into {len(chunks)} chunks of ~{words_per_chunk} words each\n")
+        logger.debug(f"Split {len(word_timestamps)} words into {len(chunks)} chunks")
         
         # LAYER 0: Create base subtitles for each chunk showing text in white
-        logger.info(f"✅ Layer 0 (Base text chunks):")
         for chunk_idx, chunk_words in enumerate(chunks):
             chunk_text = " ".join([w['word'] for w in chunk_words])
             chunk_start = chunk_words[0]['start']
@@ -190,7 +179,7 @@ class CaptionGenerator:
             # For the last chunk, extend to video duration if provided
             is_last_chunk = (chunk_idx == len(chunks) - 1)
             if is_last_chunk and video_duration and video_duration > chunk_end:
-                logger.info(f"   📏 Extending last chunk from {chunk_end:.2f}s to video duration {video_duration:.2f}s")
+                logger.debug(f"Extending last chunk to video duration {video_duration:.2f}s")
                 chunk_end = video_duration
             
             start_time = self._format_ass_time(chunk_start)
@@ -199,20 +188,14 @@ class CaptionGenerator:
             # Create the base subtitle on Layer 0
             base_subtitle = f"Dialogue: 0,{start_time},{end_time},White,,0,0,0,,{self._escape_text_for_ass(chunk_text)}"
             ass_content.append(base_subtitle)
-            
-            logger.info(f"   Chunk {chunk_idx + 1}/{len(chunks)}: {start_time} → {end_time}")
-            logger.info(f"      Text: {chunk_text}")
         
         # LAYER 1: Create individual yellow word overlays
-        logger.info(f"\n📝 Layer 1 (Yellow highlights):")
         
         # Minimum duration for a word highlight to be visible (in seconds)
         # Too short and it won't render or be perceptible
         MIN_HIGHLIGHT_DURATION = 0.15  # 150ms minimum
         
         for chunk_idx, chunk_words in enumerate(chunks):
-            logger.info(f"\n   Chunk {chunk_idx + 1}/{len(chunks)} highlights:")
-            
             for word_idx_in_chunk, word_data in enumerate(chunk_words):
                 word = word_data['word']
                 word_start = word_data['start']
@@ -236,10 +219,6 @@ class CaptionGenerator:
                     else:
                         # Last word overall, can extend freely
                         word_end = desired_end
-                    
-                    logger.info(f"      Word {word_idx_in_chunk + 1}/{len(chunk_words)}: '{word}' ({word_start:.3f}s → {word_end:.3f}s) [extended from {original_duration:.3f}s]")
-                else:
-                    logger.info(f"      Word {word_idx_in_chunk + 1}/{len(chunk_words)}: '{word}' ({word_start:.3f}s → {word_end:.3f}s)")
                 
                 # Find global word index
                 global_word_idx = word_timestamps.index(word_data)
@@ -264,75 +243,7 @@ class CaptionGenerator:
                 
                 ass_content.append(dialogue_line)
         
-        logger.info(f"\n✅ Generated {len(word_timestamps)} dialogue lines (one per word)")
-        
-        # Create a visual timeline showing what text is visible when
-        logger.info(f"\n{'='*80}")
-        logger.info(f"📊 VISUAL TIMELINE (what you should see on screen)")
-        logger.info(f"{'='*80}")
-        
-        # Create timeline showing chunks with moving highlight
-        if word_timestamps and chunks:
-            start_time = word_timestamps[0]['start']
-            end_time = word_timestamps[-1]['end']
-            
-            # If video duration is provided and extends beyond last word, use it
-            if video_duration and video_duration > end_time:
-                timeline_end = video_duration
-            else:
-                timeline_end = end_time
-            
-            time_step = 0.2  # 200ms increments for readability
-            
-            current_time = start_time
-            
-            while current_time <= timeline_end + 0.1:
-                # Find which chunk and word is active at this time
-                active_chunk_idx = None
-                highlighted_word_idx_in_chunk = None
-                
-                for chunk_idx, chunk_words in enumerate(chunks):
-                    chunk_start = chunk_words[0]['start']
-                    chunk_end = chunk_words[-1]['end']
-                    
-                    if chunk_start <= current_time <= chunk_end:
-                        active_chunk_idx = chunk_idx
-                        
-                        # Find highlighted word in this chunk
-                        for word_idx, wt in enumerate(chunk_words):
-                            if wt['start'] <= current_time < wt['end']:
-                                highlighted_word_idx_in_chunk = word_idx
-                                break
-                        break
-                
-                if active_chunk_idx is not None:
-                    chunk_words = chunks[active_chunk_idx]
-                    
-                    # Build the visual representation
-                    visual_parts = []
-                    for idx, word_data in enumerate(chunk_words):
-                        word = word_data['word']
-                        if idx == highlighted_word_idx_in_chunk:
-                            visual_parts.append(f"[{word}]")  # Highlighted
-                        else:
-                            visual_parts.append(word)  # Not highlighted
-                    
-                    visual_text = " ".join(visual_parts)
-                    logger.info(f"   {current_time:05.2f}s: {visual_text}")
-                elif current_time > word_timestamps[-1]['end']:
-                    # After all words are done, show last chunk without highlight (extended to video end)
-                    last_chunk = chunks[-1]
-                    chunk_text = " ".join([w['word'] for w in last_chunk])
-                    logger.info(f"   {current_time:05.2f}s: {chunk_text} (extended)")
-                
-                current_time += time_step
-        
-        logger.info(f"{'='*80}")
-        logger.info(f"Legend: [word] = highlighted in yellow")
-        logger.info(f"        word = visible in white")
-        logger.info(f"~6 words per chunk (like TikTok/Instagram)")
-        logger.info(f"Each chunk stays on screen - only the highlight moves!")
-        logger.info(f"{'='*80}\n")
+        logger.debug(f"Generated {len(word_timestamps)} dialogue lines with karaoke effects")
         
         return "\n".join(ass_content)
     
@@ -360,12 +271,7 @@ class CaptionGenerator:
         """
         ass_file = None
         try:
-            logger.info(f"\n{'='*80}")
-            logger.info(f"🎬 STARTING CAPTION GENERATION")
-            logger.info(f"{'='*80}")
-            logger.info(f"📹 Video: {video_path}")
-            logger.info(f"🎵 Audio: {audio_path}")
-            logger.info(f"⏱️  Timestamps: {timestamps_path}")
+            logger.info(f"Starting caption generation for video: {video_path}")
             
             # Validate inputs
             if not os.path.exists(video_path):
@@ -378,7 +284,7 @@ class CaptionGenerator:
             with open(timestamps_path, 'r') as f:
                 word_timestamps = json.load(f)
             
-            logger.info(f"\n📝 Loaded {len(word_timestamps)} word timestamps from file")
+            logger.debug(f"Loaded {len(word_timestamps)} word timestamps")
             
             # Generate output path if not provided
             if output_path is None:
@@ -411,14 +317,9 @@ class CaptionGenerator:
                 video_width = probe_data['streams'][0]['width']
                 video_height = probe_data['streams'][0]['height']
                 video_duration = float(probe_data['format']['duration']) if 'format' in probe_data and 'duration' in probe_data['format'] else None
-                logger.info(f"Video dimensions: {video_width}x{video_height}")
-                if video_duration:
-                    logger.info(f"Video duration: {video_duration:.2f}s")
+                logger.debug(f"Video dimensions: {video_width}x{video_height}, duration: {video_duration:.2f}s" if video_duration else f"Video dimensions: {video_width}x{video_height}")
             
             # Generate ASS subtitle content
-            logger.info(f"\n{'='*80}")
-            logger.info(f"📝 GENERATING ASS SUBTITLES")
-            logger.info(f"{'='*80}")
             
             ass_content = self._generate_ass_subtitles(
                 word_timestamps,
@@ -437,15 +338,7 @@ class CaptionGenerator:
             ass_file.write(ass_content)
             ass_file.close()
             
-            logger.info(f"\n{'='*80}")
-            logger.info(f"📄 Created ASS subtitle file: {ass_file.name}")
-            logger.info(f"📏 ASS file size: {len(ass_content)} characters")
-            logger.info(f"\n📜 ASS File Content:")
-            logger.info(f"{'='*80}")
-            # Log the full ASS content for debugging
-            for line_num, line in enumerate(ass_content.split('\n'), 1):
-                logger.info(f"{line_num:3d}: {line}")
-            logger.info(f"{'='*80}\n")
+            logger.debug(f"Created ASS subtitle file: {ass_file.name}")
             
             # Build ffmpeg command using subtitles filter
             # The subtitles filter burns ASS subtitles into the video
@@ -461,12 +354,7 @@ class CaptionGenerator:
                 output_path
             ]
             
-            logger.info(f"\n{'='*80}")
-            logger.info(f"🎬 RUNNING FFMPEG")
-            logger.info(f"{'='*80}")
-            logger.info(f"Command: {' '.join(cmd)}")
-            logger.info(f"Output: {output_path}")
-            logger.info(f"⏳ Processing... (this may take a few minutes)")
+            logger.debug(f"Running ffmpeg to burn subtitles into video")
             
             # Run ffmpeg
             result = subprocess.run(
@@ -476,26 +364,16 @@ class CaptionGenerator:
             )
             
             if result.returncode != 0:
-                logger.error(f"\n{'='*80}")
-                logger.error(f"❌ FFMPEG FAILED")
-                logger.error(f"{'='*80}")
-                logger.error(f"Return code: {result.returncode}")
-                logger.error(f"\nSTDERR:")
-                logger.error(result.stderr)
-                logger.error(f"\nSTDOUT:")
-                logger.error(result.stdout)
-                logger.error(f"{'='*80}")
+                logger.error(f"ffmpeg failed with return code {result.returncode}")
+                logger.error(f"stderr: {result.stderr}")
                 raise Exception(f"ffmpeg failed: {result.stderr}")
-            
-            logger.info(f"\n✅ ffmpeg completed successfully")
-            logger.info(f"✅ Captioned video created: {output_path}")
             
             # Verify output file exists and has content
             if not os.path.exists(output_path):
                 raise Exception("Output file was not created")
             
             file_size = os.path.getsize(output_path)
-            logger.info(f"📁 Output file size: {file_size:,} bytes ({file_size / 1024 / 1024:.2f} MB)")
+            logger.info(f"Captioned video created: {output_path} ({file_size / 1024 / 1024:.2f} MB)")
             
             return output_path
             
@@ -507,7 +385,7 @@ class CaptionGenerator:
             if ass_file and os.path.exists(ass_file.name):
                 try:
                     os.unlink(ass_file.name)
-                    logger.info(f"🧹 Cleaned up temporary ASS file")
+                    logger.debug(f"Cleaned up temporary ASS file")
                 except Exception as e:
                     logger.warning(f"Failed to clean up ASS file: {e}")
     
@@ -537,7 +415,7 @@ class CaptionGenerator:
         """
         ass_file = None
         try:
-            logger.info(f"🎬 Adding simple captions to video: {video_path}")
+            logger.info(f"Adding simple captions to video: {video_path}")
             
             # Validate inputs
             if not os.path.exists(video_path):
@@ -550,7 +428,7 @@ class CaptionGenerator:
             with open(timestamps_path, 'r') as f:
                 word_timestamps = json.load(f)
             
-            logger.info(f"📝 Loaded {len(word_timestamps)} word timestamps")
+            logger.debug(f"Loaded {len(word_timestamps)} word timestamps")
             
             # Generate output path if not provided
             if output_path is None:
@@ -622,7 +500,7 @@ class CaptionGenerator:
             ass_file.write('\n'.join(ass_content))
             ass_file.close()
             
-            logger.info(f"📄 Created simple ASS subtitle file: {ass_file.name}")
+            logger.debug(f"Created simple ASS subtitle file: {ass_file.name}")
             
             # Build and run ffmpeg command
             cmd = [
@@ -637,7 +515,7 @@ class CaptionGenerator:
                 output_path
             ]
             
-            logger.info(f"🎬 Running ffmpeg to generate captioned video")
+            logger.debug(f"Running ffmpeg to generate captioned video")
             
             result = subprocess.run(cmd, capture_output=True, text=True)
             
@@ -646,10 +524,8 @@ class CaptionGenerator:
                 logger.error(f"stderr: {result.stderr}")
                 raise Exception(f"ffmpeg failed: {result.stderr}")
             
-            logger.info(f"✅ Captioned video created: {output_path}")
-            
             file_size = os.path.getsize(output_path)
-            logger.info(f"📁 Output file size: {file_size:,} bytes ({file_size / 1024 / 1024:.2f} MB)")
+            logger.info(f"Captioned video created: {output_path} ({file_size / 1024 / 1024:.2f} MB)")
             
             return output_path
             

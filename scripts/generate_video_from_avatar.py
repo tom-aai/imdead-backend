@@ -11,7 +11,7 @@ import requests
 # ============================================================================
 IMAGE_ASSET_ID = "f9ee171e-c671-439a-95d3-a0bc1e320c27"  # Your Hedra avatar asset ID
 AUDIO_FILE_PATH = "/Users/tom/Downloads/test.mp3"   # Path to your audio file. butterscotch_16
-TEXT_PROMPT = "professional interview conversation"  # Description for the video
+TEXT_PROMPT = "professional interview conversation"  # Description for the video. "professional business conversation with natural expressions". "attentive listening and speaking in a professional interview"
 ASPECT_RATIO = "16:9"  # Options: "16:9", "9:16", "1:1"
 RESOLUTION = "720p"    # Options: "540p", "720p"
 OUTPUT_FILENAME = "generated_video.mp4"  # Output filename

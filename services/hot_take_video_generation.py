@@ -118,7 +118,7 @@ class HotTakeVideoGenerationService:
         if hot_take_number not in [1, 2]:
             raise ValueError("hot_take_number must be 1 or 2")
         
-        logger.info(f"🎬 Starting hot take #{hot_take_number} video generation for session {session_id}")
+        logger.info(f"Starting hot take #{hot_take_number} video generation for session {session_id}")
         
         # Step 1: Get hot_take and hedra_avatar_id from interview_call_analysis
         hot_take_text, hedra_avatar_id = self._get_hot_take_data(session_id, hot_take_number)
@@ -129,8 +129,8 @@ class HotTakeVideoGenerationService:
         if not hedra_avatar_id:
             raise ValueError(f"No hedra_avatar_id found for session {session_id}")
         
-        logger.info(f"📝 Hot take #{hot_take_number} text: {hot_take_text[:100]}...")
-        logger.info(f"🎭 Hedra avatar ID: {hedra_avatar_id}")
+        logger.debug(f"Hot take #{hot_take_number} text preview: {hot_take_text[:100]}...")
+        logger.debug(f"Using Hedra avatar ID: {hedra_avatar_id}")
         
         # Step 2: Get user_id from interview_calls
         user_id = self._get_user_id_from_session(session_id)
@@ -144,7 +144,7 @@ class HotTakeVideoGenerationService:
         if not voice_id:
             raise ValueError(f"No voice_id found for user {user_id}")
         
-        logger.info(f"🎤 Using voice ID: {voice_id}")
+        logger.debug(f"Using voice ID: {voice_id}")
         
         # Determine output directory
         if output_dir is None:
@@ -160,7 +160,7 @@ class HotTakeVideoGenerationService:
             hot_take_number
         )
         
-        logger.info(f"✅ Audio generated: {temp_audio_path}")
+        logger.info(f"Audio generated for hot take #{hot_take_number}")
         
         # Step 5: Generate video using Hedra
         temp_video_path = self._generate_video_with_hedra(
@@ -173,7 +173,7 @@ class HotTakeVideoGenerationService:
             resolution=resolution
         )
         
-        logger.info(f"🎉 Video generated successfully: {temp_video_path}")
+        logger.info(f"Video generated successfully for hot take #{hot_take_number}")
         
         # Step 6: Save all outputs to the specified directory
         base_filename = f"hot_take_{hot_take_number}_{session_id}"
@@ -197,9 +197,7 @@ class HotTakeVideoGenerationService:
         
         # Step 7: Optionally add captions using CaptionGenerator
         if add_captions:
-            logger.info(f"\n{'='*80}")
-            logger.info(f"🎨 ADDING CAPTIONS TO VIDEO")
-            logger.info(f"{'='*80}")
+            logger.info(f"Adding captions to hot take #{hot_take_number} video")
             
             try:
                 # Use CaptionGenerator to add captions with word-by-word highlighting
@@ -227,7 +225,7 @@ class HotTakeVideoGenerationService:
                 except Exception as e:
                     logger.warning(f"Failed to clean up temp video: {e}")
                 
-                logger.info(f"✅ Captions added successfully!")
+                logger.info(f"Captions added successfully to hot take #{hot_take_number}")
                 message = f"Hot take #{hot_take_number} video generated with captions"
                 
             except Exception as e:
@@ -259,17 +257,12 @@ class HotTakeVideoGenerationService:
             
             message = f"Hot take #{hot_take_number} video generated (without captions)"
         
-        logger.info(f"\n💾 Saved outputs:")
-        logger.info(f"  - Video: {video_path}")
-        logger.info(f"  - Audio: {audio_path}")
-        logger.info(f"  - Timestamps: {timestamps_path}")
+        logger.debug(f"Saved video to {video_path}")
         
         # Step 8: Upload video to Supabase storage and update database
         storage_path = None
         try:
-            logger.info(f"\n{'='*80}")
-            logger.info(f"☁️ UPLOADING TO SUPABASE")
-            logger.info(f"{'='*80}")
+            logger.info(f"Uploading hot take #{hot_take_number} video to Supabase")
             
             # Upload the final video to Supabase storage
             storage_path = self._upload_video_to_storage(
@@ -286,26 +279,22 @@ class HotTakeVideoGenerationService:
                 hot_take_number=hot_take_number
             )
             
-            logger.info(f"✅ Video uploaded to Supabase storage: {storage_path}")
-            logger.info(f"✅ Database updated with video path")
+            logger.info(f"Video uploaded to storage and database updated: {storage_path}")
             
             # Step 9: Clean up local files after successful upload
-            logger.info(f"\n🧹 Cleaning up local files...")
+            logger.debug(f"Cleaning up local files for hot take #{hot_take_number}")
             files_to_cleanup = [video_path, audio_path, timestamps_path]
             for file_path_to_delete in files_to_cleanup:
                 try:
                     if os.path.exists(file_path_to_delete):
                         os.unlink(file_path_to_delete)
-                        logger.info(f"  ✅ Deleted: {os.path.basename(file_path_to_delete)}")
+                        logger.debug(f"Deleted: {os.path.basename(file_path_to_delete)}")
                 except Exception as cleanup_error:
-                    logger.warning(f"  ⚠️  Failed to delete {file_path_to_delete}: {cleanup_error}")
-            
-            logger.info(f"✅ Local files cleaned up")
+                    logger.warning(f"Failed to delete {os.path.basename(file_path_to_delete)}: {cleanup_error}")
             
         except Exception as e:
             logger.error(f"Failed to upload video to Supabase: {e}")
-            logger.warning(f"Video saved locally but not uploaded to cloud storage")
-            logger.warning(f"Local files NOT deleted due to upload failure")
+            logger.warning(f"Video saved locally at {video_path} but not uploaded to cloud storage")
         
         return {
             "status": "success",
@@ -443,7 +432,7 @@ class HotTakeVideoGenerationService:
             Exception: If audio generation fails
         """
         try:
-            logger.info(f"🎵 Generating audio with Cartesia SSE (voice: {voice_id})")
+            logger.info(f"Generating audio with Cartesia SSE (voice: {voice_id})")
             
             # Prepare SSE request
             url = "https://api.cartesia.ai/tts/sse"
@@ -500,24 +489,16 @@ class HotTakeVideoGenerationService:
                     try:
                         data = json.loads(data_str)
                         
-                        # Log first few events to see structure
-                        if event_count <= 3:
-                            logger.info(f"SSE event #{event_count} type: {data.get('type')}")
-                        
                         # Handle audio chunk - data is in 'data' field when type is 'chunk'
                         if data.get('type') == 'chunk' and 'data' in data:
                             # Audio comes as base64 encoded in the 'data' field
                             import base64
                             audio_bytes = base64.b64decode(data['data'])
                             audio_chunks.append(audio_bytes)
-                            if event_count <= 3:
-                                logger.info(f"Found audio chunk of {len(audio_bytes)} bytes")
                         
                         # Handle word timestamps - look for timestamp events
                         if 'word_timestamps' in data:
                             timestamps_data = data['word_timestamps']
-                            if event_count <= 10:
-                                logger.info(f"Timestamp event structure: {timestamps_data}")
                             
                             # Cartesia format: {'words': ['word1', 'word2'], 'start': [0.1, 0.5], 'end': [0.3, 0.7]}
                             # Convert to: [{'word': 'word1', 'start': 0.1, 'end': 0.3}, ...]
@@ -532,9 +513,6 @@ class HotTakeVideoGenerationService:
                                         'start': starts[i],
                                         'end': ends[i]
                                     })
-                                
-                                if event_count <= 10:
-                                    logger.info(f"Added {len(words)} words from timestamp event")
                         
                         # Also check if timestamps are in the main data object
                         if data.get('type') == 'timestamps':
@@ -549,21 +527,15 @@ class HotTakeVideoGenerationService:
                                         'start': starts[i],
                                         'end': ends[i]
                                     })
-                                
-                                logger.info(f"Added {len(words)} words from timestamp event (type=timestamps)")
                             
                     except json.JSONDecodeError as e:
-                        logger.warning(f"Failed to parse SSE data on event {event_count}: {e}")
-                        logger.warning(f"Data string: {data_str[:200]}")
+                        logger.warning(f"Failed to parse SSE data: {e}")
                         continue
-            
-            logger.info(f"📊 Processed {event_count} SSE events")
             
             # Combine all audio chunks
             raw_audio = b''.join(audio_chunks)
             
-            logger.info(f"📊 Received {len(audio_chunks)} audio chunks totaling {len(raw_audio)} bytes")
-            logger.info(f"📊 Received {len(word_timestamps)} word timestamps")
+            logger.debug(f"Processed {event_count} SSE events, received {len(audio_chunks)} audio chunks ({len(raw_audio)} bytes) and {len(word_timestamps)} word timestamps")
             
             # Convert raw PCM to WAV file - save to current directory for debugging
             output_filename = f"hot_take_{hot_take_number}_audio_{session_id}.wav"
@@ -576,10 +548,7 @@ class HotTakeVideoGenerationService:
                 wav_file.setframerate(44100)  # Sample rate
                 wav_file.writeframes(raw_audio)
             
-            # Get file size for logging
-            file_size = os.path.getsize(output_path)
-            logger.info(f"✅ Audio generated: {output_path}")
-            logger.info(f"📁 Audio file size: {file_size:,} bytes ({file_size / 1024:.2f} KB)")
+            logger.debug(f"Audio saved to {output_path}")
             
             return output_path, word_timestamps
             
@@ -616,7 +585,7 @@ class HotTakeVideoGenerationService:
             Exception: If video generation fails
         """
         try:
-            logger.info(f"🎬 Generating video with Hedra")
+            logger.info(f"Generating video with Hedra for hot take #{hot_take_number}")
             
             # Initialize Hedra session
             session = HedraSession(api_key=self.hedra_api_key)
@@ -648,7 +617,7 @@ class HotTakeVideoGenerationService:
             
             self._download_video(status_data["download_url"], output_filename)
             
-            logger.info(f"✅ Video saved to: {output_filename}")
+            logger.debug(f"Video saved to {output_filename}")
             return output_filename
             
         except Exception as e:
@@ -657,11 +626,7 @@ class HotTakeVideoGenerationService:
     
     def _upload_audio_file(self, session: HedraSession, audio_path: str) -> str:
         """Upload an audio file to Hedra and return the asset ID"""
-        logger.info(f"📤 Uploading audio file to Hedra: {audio_path}")
-        
-        # Log file info
-        file_size = os.path.getsize(audio_path)
-        logger.info(f"📁 File size: {file_size:,} bytes ({file_size / 1024:.2f} KB)")
+        logger.debug(f"Uploading audio file to Hedra: {audio_path}")
         
         # Create the audio asset
         create_response = session.post(
@@ -676,7 +641,7 @@ class HotTakeVideoGenerationService:
             raise Exception(f"Failed to create audio asset: {create_response.text}")
         
         audio_id = create_response.json()["id"]
-        logger.info(f"Created audio asset with ID: {audio_id}")
+        logger.debug(f"Created audio asset with ID: {audio_id}")
         
         # Upload the audio file
         with open(audio_path, "rb") as f:
@@ -691,9 +656,7 @@ class HotTakeVideoGenerationService:
             )
             raise Exception(f"Failed to upload audio file: {upload_response.text}")
         
-        upload_result = upload_response.json()
-        logger.info(f"✅ Audio uploaded with ID: {audio_id}")
-        logger.debug(f"Upload response: {json.dumps(upload_result, indent=2)}")
+        logger.debug(f"Audio uploaded with ID: {audio_id}")
         return audio_id
     
     def _create_video_generation(
@@ -706,7 +669,7 @@ class HotTakeVideoGenerationService:
         resolution: str
     ) -> str:
         """Create a video generation request and return the generation ID"""
-        logger.info("🎬 Creating video generation request")
+        logger.debug(f"Creating video generation request (resolution: {resolution}, aspect_ratio: {aspect_ratio})")
         
         generation_data = {
             "type": "video",
@@ -720,8 +683,6 @@ class HotTakeVideoGenerationService:
             },
         }
         
-        logger.info(f"Generation request data: {json.dumps(generation_data, indent=2)}")
-        
         response = session.post("/generations", json=generation_data)
         
         if not response.ok:
@@ -732,37 +693,35 @@ class HotTakeVideoGenerationService:
         
         result = response.json()
         generation_id = result["id"]
-        logger.info(f"✅ Created generation with ID: {generation_id}")
-        logger.debug(f"Generation response: {json.dumps(result, indent=2)}")
+        logger.debug(f"Created generation with ID: {generation_id}")
         
         return generation_id
     
     def _poll_generation_status(self, session: HedraSession, generation_id: str) -> dict:
         """Poll the generation status until it completes or errors"""
-        logger.info(f"⏳ Polling status for generation: {generation_id}")
+        logger.debug(f"Polling generation status: {generation_id}")
         
+        poll_count = 0
         while True:
             response = session.get(f"/generations/{generation_id}/status")
             
             if not response.ok:
-                logger.error(
-                    f"Error getting status: {response.status_code} {response.text}"
-                )
+                logger.error(f"Error getting generation status: {response.status_code} {response.text}")
                 raise Exception(f"Failed to get generation status: {response.text}")
             
             status_data = response.json()
             status = status_data["status"]
-            logger.info(f"Generation status: {status}")
+            
+            poll_count += 1
+            if poll_count % 6 == 0:  # Log every 30 seconds (6 * 5s)
+                logger.debug(f"Generation status: {status}")
             
             if status == "complete":
-                logger.info("✅ Generation complete!")
+                logger.info("Video generation complete")
                 return status_data
             elif status == "error":
                 error_message = status_data.get("error_message", "Unknown error")
-                # Log the full response to see what Hedra is returning
-                logger.error(f"❌ Hedra generation error!")
-                logger.error(f"Full error response: {json.dumps(status_data, indent=2)}")
-                logger.error(f"Error message: {error_message}")
+                logger.error(f"Hedra generation error: {error_message}")
                 raise Exception(f"Video generation failed: {error_message}")
             
             # Still processing, wait and check again
@@ -797,7 +756,7 @@ class HotTakeVideoGenerationService:
             # Construct the storage path (flat structure)
             storage_path = f"hot_take_{hot_take_number}_{session_id}.mp4"
             
-            logger.info(f"☁️ Uploading video to Supabase storage: {storage_path}")
+            logger.debug(f"Uploading video to Supabase storage: {storage_path}")
             
             # Read the video file
             with open(video_path, "rb") as f:
@@ -814,7 +773,7 @@ class HotTakeVideoGenerationService:
                 }
             )
             
-            logger.info(f"✅ Video uploaded successfully to storage: {storage_path}")
+            logger.debug(f"Video uploaded to storage: {storage_path}")
             return storage_path
             
         except Exception as e:
@@ -841,7 +800,7 @@ class HotTakeVideoGenerationService:
         try:
             column_name = f"hot_take_video_{hot_take_number}"
             
-            logger.info(f"💾 Updating database column {column_name} with: {storage_path}")
+            logger.debug(f"Updating database column {column_name} with: {storage_path}")
             
             # Update the specific column in interview_call_analysis
             response = self.supabase.table("interview_call_analysis")\
@@ -852,16 +811,13 @@ class HotTakeVideoGenerationService:
             if not response.data or len(response.data) == 0:
                 raise Exception(f"No rows updated for session_id: {session_id}")
             
-            logger.info(f"✅ Database updated successfully")
-            
         except Exception as e:
             logger.error(f"Failed to update database: {e}")
             raise Exception(f"Database update failed: {e}")
     
     def _download_video(self, download_url: str, output_path: str) -> None:
         """Download the generated video from the provided URL"""
-        logger.info(f"📥 Downloading video from {download_url}")
-        logger.info(f"💾 Saving to: {output_path}")
+        logger.debug(f"Downloading video to {output_path}")
         
         try:
             with requests.get(download_url, stream=True) as r:
@@ -870,7 +826,7 @@ class HotTakeVideoGenerationService:
                     for chunk in r.iter_content(chunk_size=8192):
                         f.write(chunk)
             
-            logger.info(f"✅ Successfully downloaded video to {output_path}")
+            logger.debug(f"Video downloaded successfully")
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to download video: {e}")
             raise
