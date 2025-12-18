@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional
 
 from services.transcript_processing import TranscriptProcessor
 from services.profile_aggregation import ProfileAggregator
+from services.cartoon_generator import CartoonGenerator
 from services.hedra_avatar_generation import HedraAvatarGenerator
 from services.clone_voice import VoiceCloningService
 from services.hot_take_video_generation import HotTakeVideoGenerationService
@@ -22,7 +23,7 @@ class PostCallOrchestrator:
 	Handles task execution, retries, and error management.
 	"""
 	
-	def __init__(self, supabase_client, anthropic_api_key: str = None, hedra_api_key: str = None, cartesia_api_key: str = None):
+	def __init__(self, supabase_client, anthropic_api_key: str = None, hedra_api_key: str = None, cartesia_api_key: str = None, google_api_key: str = None):
 		"""
 		Initialize the post-call orchestrator.
 		
@@ -31,10 +32,12 @@ class PostCallOrchestrator:
 			anthropic_api_key: Anthropic API key (optional, will use env var if not provided)
 			hedra_api_key: Hedra API key (optional, will use env var if not provided)
 			cartesia_api_key: Cartesia API key (optional, will use env var if not provided)
+			google_api_key: Google API key (optional, will use env var if not provided)
 		"""
 		self.supabase = supabase_client
 		self.transcript_processor = TranscriptProcessor(supabase_client, anthropic_api_key)
 		self.profile_aggregator = ProfileAggregator(supabase_client, anthropic_api_key)
+		self.cartoon_generator = CartoonGenerator(supabase_client, google_api_key)
 		self.hedra_avatar_generator = HedraAvatarGenerator(supabase_client, hedra_api_key)
 		self.voice_cloning_service = VoiceCloningService(supabase_client, cartesia_api_key)
 		self.hot_take_video_service = HotTakeVideoGenerationService(supabase_client, cartesia_api_key, hedra_api_key)
@@ -46,7 +49,8 @@ class PostCallOrchestrator:
 		Currently runs:
 		- Transcript processing and analysis
 		- User profile aggregation
-		- Hedra avatar generation from user image
+		- Image cartoonization (transform to editorial illustration)
+		- Hedra avatar generation from cartoonized image
 		- Voice recording processing for voice cloning
 		- Hot take video generation (2 videos)
 		
@@ -83,16 +87,26 @@ class PostCallOrchestrator:
 			)
 			results["tasks"]["profile_aggregation"] = profile_result
 			
-			# Task 3: Generate Hedra avatar from user image
+			# Task 3: Cartoonize user image (transform to editorial illustration)
+			cartoonize_result = await self._run_with_retry(
+				task_name="image_cartoonization",
+				task_func=self._cartoonize_image,
+				session_id=session_id,
+				max_retries=3
+			)
+			results["tasks"]["image_cartoonization"] = cartoonize_result
+			
+			# Task 4: Generate Hedra avatar from cartoonized image
 			hedra_avatar_result = await self._run_with_retry(
 				task_name="hedra_avatar_generation",
 				task_func=self._generate_hedra_avatar,
 				session_id=session_id,
-				max_retries=3
+				max_retries=3,
+				cartoonized_picture_id=cartoonize_result.get("result", {}).get("cartoonized_picture_id") if cartoonize_result.get("status") == "success" else None
 			)
 			results["tasks"]["hedra_avatar_generation"] = hedra_avatar_result
 			
-			# Task 4: Process voice recording for cloning
+			# Task 5: Process voice recording for cloning
 			voice_cloning_result = await self._run_with_retry(
 				task_name="voice_cloning",
 				task_func=self._process_voice_recording,
@@ -101,7 +115,7 @@ class PostCallOrchestrator:
 			)
 			results["tasks"]["voice_cloning"] = voice_cloning_result
 			
-			# Task 5: Generate hot take video #1
+			# Task 6: Generate hot take video #1
 			hot_take_1_result = await self._run_with_retry(
 				task_name="hot_take_video_1",
 				task_func=self._generate_hot_take_video_1,
@@ -110,7 +124,7 @@ class PostCallOrchestrator:
 			)
 			results["tasks"]["hot_take_video_1"] = hot_take_1_result
 			
-			# Task 6: Generate hot take video #2
+			# Task 7: Generate hot take video #2
 			hot_take_2_result = await self._run_with_retry(
 				task_name="hot_take_video_2",
 				task_func=self._generate_hot_take_video_2,
@@ -213,6 +227,32 @@ class PostCallOrchestrator:
 		"""
 		return self.profile_aggregator.aggregate_user_profile(session_id)
 	
+	def _cartoonize_image(self, session_id: str) -> dict:
+		"""
+		Transform user's image into editorial illustration style.
+		
+		Args:
+			session_id: The LiveKit session ID
+			
+		Returns:
+			dict: Image cartoonization result with new picture_id
+		"""
+		# Look up the picture_id and user_id from the session
+		picture_id, user_id = self._get_picture_and_user_from_session(session_id)
+		
+		if not picture_id:
+			raise ValueError(f"No picture_id found for session {session_id}")
+		
+		if not user_id:
+			raise ValueError(f"No user_id found for session {session_id}")
+		
+		# Cartoonize the image
+		return self.cartoon_generator.cartoonize_image(
+			user_id=user_id,
+			picture_id=picture_id,
+			session_id=session_id
+		)
+	
 	def _get_picture_and_user_from_session(self, session_id: str) -> tuple[Optional[str], Optional[str]]:
 		"""
 		Look up the picture_id and user_id associated with a session.
@@ -242,31 +282,64 @@ class PostCallOrchestrator:
 			logger.error(f"Failed to fetch picture_id/user_id for session {session_id}: {e}")
 			return (None, None)
 	
-	def _generate_hedra_avatar(self, session_id: str) -> dict:
+	def _get_cartoon_id_from_session(self, session_id: str) -> Optional[str]:
 		"""
-		Generate Hedra avatar from user's uploaded image using Hedra API.
-		
-		The HedraAvatarGenerator will automatically update interview_call_analysis.
+		Look up the cartoon_id associated with a session.
 		
 		Args:
 			session_id: The LiveKit session ID
 			
 		Returns:
+			str: cartoon_id or None if not found
+		"""
+		try:
+			response = self.supabase.table("interview_calls")\
+				.select("cartoon_id")\
+				.eq("session_id", session_id)\
+				.limit(1)\
+				.execute()
+			
+			if response.data and len(response.data) > 0:
+				return response.data[0].get('cartoon_id')
+			
+			logger.warning(f"No cartoon_id found for session {session_id}")
+			return None
+			
+		except Exception as e:
+			logger.error(f"Failed to fetch cartoon_id for session {session_id}: {e}")
+			return None
+	
+	def _generate_hedra_avatar(self, session_id: str, cartoonized_picture_id: str = None) -> dict:
+		"""
+		Generate Hedra avatar from cartoonized image using Hedra API.
+		
+		The HedraAvatarGenerator will automatically update interview_call_analysis.
+		
+		Args:
+			session_id: The LiveKit session ID
+			cartoonized_picture_id: The cartoonized picture ID (from image_cartoonization task, optional for backward compatibility)
+			
+		Returns:
 			dict: Hedra avatar generation result
 		"""
-		# Look up the picture_id and user_id from the session
-		picture_id, user_id = self._get_picture_and_user_from_session(session_id)
-		
-		if not picture_id:
-			raise ValueError(f"No picture_id found for session {session_id}")
+		# Look up the user_id from the session
+		_, user_id = self._get_picture_and_user_from_session(session_id)
 		
 		if not user_id:
 			raise ValueError(f"No user_id found for session {session_id}")
 		
+		# Get cartoon_id from interview_calls (prefer this over passed parameter)
+		cartoon_id = self._get_cartoon_id_from_session(session_id)
+		
+		if not cartoon_id:
+			raise ValueError(f"No cartoon_id found for session {session_id}")
+		
+		logger.info(f"Using cartoonized image for Hedra avatar: {cartoon_id}")
+		
 		# Generate the Hedra avatar (will also update interview_call_analysis)
 		return self.hedra_avatar_generator.generate_avatar(
 			user_id=user_id,
-			picture_id=picture_id,
+			picture_id=cartoon_id,
 			session_id=session_id
 		)
 	

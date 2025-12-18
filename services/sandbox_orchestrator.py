@@ -34,6 +34,8 @@ def setup_clients():
     SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
     HEDRA_API_KEY = os.getenv("HEDRA_API_KEY")
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
     
     if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY]):
         logger.error("Missing required environment variables")
@@ -48,8 +50,11 @@ def setup_clients():
     if not HEDRA_API_KEY:
         logger.warning("  - HEDRA_API_KEY not set (avatar generation will be unavailable)")
     
+    if not GOOGLE_API_KEY:
+        logger.warning("  - GOOGLE_API_KEY not set (image cartoonization will be unavailable)")
+    
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    return supabase, ANTHROPIC_API_KEY, HEDRA_API_KEY
+    return supabase, ANTHROPIC_API_KEY, HEDRA_API_KEY, GOOGLE_API_KEY, CARTESIA_API_KEY
 
 
 def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
@@ -78,34 +83,41 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
             # No cleanup needed here since we want to test updating existing records
             logger.debug("Skipping user_profiles cleanup - profile_aggregation updates existing records")
         
-	# Hedra avatar generation cleanup
-	if not task_name or task_name == "hedra_avatar_generation":
-		response = supabase.table("user_avatar_images").delete().eq("session_id", session_id).execute()
-		if response.data:
-			logger.debug(f"Deleted {len(response.data)} record(s) from user_avatar_images")
-	
-	# Voice cloning cleanup
-	# Voice cloning creates temporary files but doesn't write to database (yet)
-	# No cleanup needed here - files are temporary and will be cleaned up by the OS
-	if not task_name or task_name == "voice_cloning":
-		logger.debug("Voice cloning cleanup - no database records to delete")
-	
-	# Hot take video cleanup
-	# Videos are stored in Supabase storage and references are in interview_call_analysis
-	# Clear the hot_take_video_1 and hot_take_video_2 columns
-	if not task_name or task_name in ["hot_take_video_1", "hot_take_video_2"]:
-		update_data = {}
-		if not task_name or task_name == "hot_take_video_1":
-			update_data["hot_take_video_1"] = None
-		if not task_name or task_name == "hot_take_video_2":
-			update_data["hot_take_video_2"] = None
-		
-		if update_data:
-			response = supabase.table("interview_call_analysis").update(update_data).eq("session_id", session_id).execute()
-			if response.data:
-				logger.debug(f"Cleared hot take video references from interview_call_analysis")
-	
-	# Add cleanup for future tasks here as they're implemented
+        # Image cartoonization cleanup
+        if not task_name or task_name == "image_cartoonization":
+            # Clear the cartoon_id from interview_calls
+            response = supabase.table("interview_calls").update({"cartoon_id": None}).eq("session_id", session_id).execute()
+            if response.data:
+                logger.debug(f"Cleared cartoon_id from interview_calls")
+        
+        # Hedra avatar generation cleanup
+        if not task_name or task_name == "hedra_avatar_generation":
+            response = supabase.table("user_avatar_images").delete().eq("session_id", session_id).execute()
+            if response.data:
+                logger.debug(f"Deleted {len(response.data)} record(s) from user_avatar_images")
+        
+        # Voice cloning cleanup
+        # Voice cloning creates temporary files but doesn't write to database (yet)
+        # No cleanup needed here - files are temporary and will be cleaned up by the OS
+        if not task_name or task_name == "voice_cloning":
+            logger.debug("Voice cloning cleanup - no database records to delete")
+        
+        # Hot take video cleanup
+        # Videos are stored in Supabase storage and references are in interview_call_analysis
+        # Clear the hot_take_video_1 and hot_take_video_2 columns
+        if not task_name or task_name in ["hot_take_video_1", "hot_take_video_2"]:
+            update_data = {}
+            if not task_name or task_name == "hot_take_video_1":
+                update_data["hot_take_video_1"] = None
+            if not task_name or task_name == "hot_take_video_2":
+                update_data["hot_take_video_2"] = None
+            
+            if update_data:
+                response = supabase.table("interview_call_analysis").update(update_data).eq("session_id", session_id).execute()
+                if response.data:
+                    logger.debug(f"Cleared hot take video references from interview_call_analysis")
+        
+        # Add cleanup for future tasks here as they're implemented
         
         logger.debug("Cleanup complete")
         
@@ -159,73 +171,88 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
                 "profile_aggregation": result
             }
         }
-	elif task_name == "hedra_avatar_generation":
-		result = await orchestrator._run_with_retry(
-			task_name="hedra_avatar_generation",
-			task_func=orchestrator._generate_hedra_avatar,
-			session_id=session_id,
-			max_retries=3
-		)
-		return {
-			"session_id": session_id,
-			"status": "success",
-			"tasks": {
-				"hedra_avatar_generation": result
-			}
-		}
-	elif task_name == "voice_cloning":
-		result = await orchestrator._run_with_retry(
-			task_name="voice_cloning",
-			task_func=orchestrator._process_voice_recording,
-			session_id=session_id,
-			max_retries=3
-		)
-		return {
-			"session_id": session_id,
-			"status": "success",
-			"tasks": {
-				"voice_cloning": result
-			}
-		}
-	elif task_name == "hot_take_video_1":
-		result = await orchestrator._run_with_retry(
-			task_name="hot_take_video_1",
-			task_func=orchestrator._generate_hot_take_video_1,
-			session_id=session_id,
-			max_retries=3
-		)
-		return {
-			"session_id": session_id,
-			"status": "success",
-			"tasks": {
-				"hot_take_video_1": result
-			}
-		}
-	elif task_name == "hot_take_video_2":
-		result = await orchestrator._run_with_retry(
-			task_name="hot_take_video_2",
-			task_func=orchestrator._generate_hot_take_video_2,
-			session_id=session_id,
-			max_retries=3
-		)
-		return {
-			"session_id": session_id,
-			"status": "success",
-			"tasks": {
-				"hot_take_video_2": result
-			}
-		}
-	else:
-		logger.error(f"Unknown task: {task_name}")
-		logger.info("Available tasks:")
-		logger.info("  - transcript_processing")
-		logger.info("  - profile_aggregation")
-		logger.info("  - hedra_avatar_generation")
-		logger.info("  - voice_cloning")
-		logger.info("  - hot_take_video_1")
-		logger.info("  - hot_take_video_2")
-		logger.info("  (more tasks will be added as they're implemented)")
-		sys.exit(1)
+    elif task_name == "image_cartoonization":
+        result = await orchestrator._run_with_retry(
+            task_name="image_cartoonization",
+            task_func=orchestrator._cartoonize_image,
+            session_id=session_id,
+            max_retries=3
+        )
+        return {
+            "session_id": session_id,
+            "status": "success",
+            "tasks": {
+                "image_cartoonization": result
+            }
+        }
+    elif task_name == "hedra_avatar_generation":
+        result = await orchestrator._run_with_retry(
+            task_name="hedra_avatar_generation",
+            task_func=orchestrator._generate_hedra_avatar,
+            session_id=session_id,
+            max_retries=3
+        )
+        return {
+            "session_id": session_id,
+            "status": "success",
+            "tasks": {
+                "hedra_avatar_generation": result
+            }
+        }
+    elif task_name == "voice_cloning":
+        result = await orchestrator._run_with_retry(
+            task_name="voice_cloning",
+            task_func=orchestrator._process_voice_recording,
+            session_id=session_id,
+            max_retries=3
+        )
+        return {
+            "session_id": session_id,
+            "status": "success",
+            "tasks": {
+                "voice_cloning": result
+            }
+        }
+    elif task_name == "hot_take_video_1":
+        result = await orchestrator._run_with_retry(
+            task_name="hot_take_video_1",
+            task_func=orchestrator._generate_hot_take_video_1,
+            session_id=session_id,
+            max_retries=3
+        )
+        return {
+            "session_id": session_id,
+            "status": "success",
+            "tasks": {
+                "hot_take_video_1": result
+            }
+        }
+    elif task_name == "hot_take_video_2":
+        result = await orchestrator._run_with_retry(
+            task_name="hot_take_video_2",
+            task_func=orchestrator._generate_hot_take_video_2,
+            session_id=session_id,
+            max_retries=3
+        )
+        return {
+            "session_id": session_id,
+            "status": "success",
+            "tasks": {
+                "hot_take_video_2": result
+            }
+        }
+    else:
+        logger.error(f"Unknown task: {task_name}")
+        logger.info("Available tasks:")
+        logger.info("  - transcript_processing")
+        logger.info("  - profile_aggregation")
+        logger.info("  - image_cartoonization")
+        logger.info("  - hedra_avatar_generation")
+        logger.info("  - voice_cloning")
+        logger.info("  - hot_take_video_1")
+        logger.info("  - hot_take_video_2")
+        logger.info("  (more tasks will be added as they're implemented)")
+        sys.exit(1)
 
 
 async def run_direct_avatar_generation(supabase, hedra_key: str, user_id: str, picture_id: str, session_id: str):
@@ -322,18 +349,22 @@ def print_results(results: dict):
                 task_summary["sessions_analyzed"] = result.get("record_count")
                 task_summary["consolidated_myers_briggs"] = result.get("synthesis", {}).get("consolidated_myers_briggs")
                 
-		elif task_name == "hedra_avatar_generation":
-			task_summary["record_id"] = result.get("record_id")
-			task_summary["hedra_avatar_id"] = result.get("hedra_avatar_id")
-			task_summary["picture_id"] = result.get("picture_id")
-			
-		elif task_name == "voice_cloning":
-			task_summary["recording_id"] = result.get("recording_id")
-			task_summary["processed_file_path"] = result.get("processed_file_path")
-			
-		elif task_name == "hot_take_video_1" or task_name == "hot_take_video_2":
-			task_summary["storage_path"] = result.get("storage_path")
-			task_summary["hot_take_text_preview"] = result.get("hot_take_text", "")[:100] + "..." if result.get("hot_take_text") else None
+            elif task_name == "image_cartoonization":
+                task_summary["original_picture_id"] = result.get("original_picture_id")
+                task_summary["cartoonized_picture_id"] = result.get("cartoonized_picture_id")
+                
+            elif task_name == "hedra_avatar_generation":
+                task_summary["record_id"] = result.get("record_id")
+                task_summary["hedra_avatar_id"] = result.get("hedra_avatar_id")
+                task_summary["picture_id"] = result.get("picture_id")
+                
+            elif task_name == "voice_cloning":
+                task_summary["recording_id"] = result.get("recording_id")
+                task_summary["processed_file_path"] = result.get("processed_file_path")
+                
+            elif task_name == "hot_take_video_1" or task_name == "hot_take_video_2":
+                task_summary["storage_path"] = result.get("storage_path")
+                task_summary["hot_take_text_preview"] = result.get("hot_take_text", "")[:100] + "..." if result.get("hot_take_text") else None
                 
         elif task_result.get("status") == "error":
             task_summary["error"] = task_result.get("error")
@@ -364,6 +395,9 @@ Examples:
   
   # Run only profile aggregation
   python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task profile_aggregation
+  
+  # Run only image cartoonization
+  python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task image_cartoonization
   
   # Run only Hedra avatar generation (from call)
   python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task hedra_avatar_generation
@@ -414,7 +448,7 @@ Examples:
     try:
         # Setup clients
         logger.info("Initializing clients...")
-        supabase, anthropic_key, hedra_key = setup_clients()
+        supabase, anthropic_key, hedra_key, google_key, cartesia_key = setup_clients()
         
         # Check if this is a direct avatar generation request
         if args.user_id or args.picture_id:
@@ -435,7 +469,7 @@ Examples:
                 sys.exit(1)
             
             # Initialize orchestrator with production services
-            orchestrator = PostCallOrchestrator(supabase, anthropic_key, hedra_key)
+            orchestrator = PostCallOrchestrator(supabase, anthropic_key, hedra_key, cartesia_key, google_key)
             
             # Run orchestration based on arguments
             if args.task:

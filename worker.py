@@ -41,6 +41,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # Use service key for worker
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 HEDRA_API_KEY = os.getenv("HEDRA_API_KEY")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", "5"))  # seconds
 STUCK_JOB_TIMEOUT = int(os.getenv("STUCK_JOB_TIMEOUT", "30"))  # minutes
@@ -61,7 +62,8 @@ class JobWorker:
             supabase_client=self.supabase,
             anthropic_api_key=ANTHROPIC_API_KEY,
             hedra_api_key=HEDRA_API_KEY,
-            cartesia_api_key=CARTESIA_API_KEY
+            cartesia_api_key=CARTESIA_API_KEY,
+            google_api_key=GOOGLE_API_KEY
         )
         self.worker_id = os.getenv('RENDER_INSTANCE_ID', f'worker-{os.getpid()}')
         logger.info(f"Worker initialized with ID: {self.worker_id}")
