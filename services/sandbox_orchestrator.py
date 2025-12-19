@@ -59,8 +59,8 @@ def setup_clients():
 
 def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
     """
-    Delete existing records for tasks that create new records (e.g., transcript_processing).
-    Does NOT delete records for tasks that update existing records (e.g., profile_aggregation).
+    Delete existing records for tasks that create new records.
+    Does NOT delete records for tasks that update existing records.
     
     Args:
         supabase: Supabase client
@@ -76,11 +76,8 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
             if response.data:
                 logger.debug(f"Deleted {len(response.data)} record(s) from interview_call_analysis")
         
-        # Profile aggregation cleanup - NO deletion needed
-        # Profile aggregation updates existing records, so we don't delete them during cleanup
+        # Profile aggregation updates existing records, no cleanup needed
         if not task_name or task_name == "profile_aggregation":
-            # Profile aggregation service handles upsert logic internally
-            # No cleanup needed here since we want to test updating existing records
             logger.debug("Skipping user_profiles cleanup - profile_aggregation updates existing records")
         
         # Image cartoonization cleanup
@@ -96,15 +93,11 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
             if response.data:
                 logger.debug(f"Deleted {len(response.data)} record(s) from user_avatar_images")
         
-        # Voice cloning cleanup
-        # Voice cloning creates temporary files but doesn't write to database (yet)
-        # No cleanup needed here - files are temporary and will be cleaned up by the OS
+        # Voice cloning cleanup - no database records to delete
         if not task_name or task_name == "voice_cloning":
             logger.debug("Voice cloning cleanup - no database records to delete")
         
-        # Hot take video cleanup
-        # Videos are stored in Supabase storage and references are in interview_call_analysis
-        # Clear the hot_take_video_1 and hot_take_video_2 columns
+        # Hot take video cleanup - clear video references in interview_call_analysis
         if not task_name or task_name in ["hot_take_video_1", "hot_take_video_2"]:
             update_data = {}
             if not task_name or task_name == "hot_take_video_1":
@@ -116,8 +109,6 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
                 response = supabase.table("interview_call_analysis").update(update_data).eq("session_id", session_id).execute()
                 if response.data:
                     logger.debug(f"Cleared hot take video references from interview_call_analysis")
-        
-        # Add cleanup for future tasks here as they're implemented
         
         logger.debug("Cleanup complete")
         
@@ -251,7 +242,6 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
         logger.info("  - voice_cloning")
         logger.info("  - hot_take_video_1")
         logger.info("  - hot_take_video_2")
-        logger.info("  (more tasks will be added as they're implemented)")
         sys.exit(1)
 
 
@@ -374,9 +364,8 @@ def print_results(results: dict):
     print(json.dumps(summary, indent=2, default=str))
     print("=" * 80 + "\n")
     
-    # Print helpful note about full data
     if results.get("status") == "success":
-        print("✓ All data has been saved to Supabase. Use the analysis_id or profile_id to retrieve full details.")
+        print("✓ All data has been saved to Supabase.")
         print()
 
 

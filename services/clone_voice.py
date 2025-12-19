@@ -65,9 +65,9 @@ class VoiceCloningService:
         
         logger.debug(f"Found recording_id: {recording_id}, call_type: {call_type}")
         
-        # Check if this is an onboarding call - only clone voices for onboarding
+        # Only clone voices for onboarding calls
         if call_type != "onboarding":
-            logger.info(f"Skipping voice cloning for call_type '{call_type}' - only onboarding calls require voice cloning")
+            logger.info(f"Skipping voice cloning for '{call_type}' call - only onboarding calls require voice cloning")
             return {
                 "status": "skipped",
                 "message": f"Voice cloning skipped for {call_type} call",
@@ -76,7 +76,7 @@ class VoiceCloningService:
                 "call_type": call_type
             }
         
-        logger.info(f"Onboarding call detected - proceeding with voice cloning for session {session_id}")
+        logger.info(f"Processing voice cloning for onboarding call {session_id}")
         
         # Step 2: Download recording from Supabase storage
         local_recording_path = self._download_recording(recording_id)
@@ -350,7 +350,7 @@ class VoiceCloningService:
         audio: AudioSegment,
         segments: list[tuple[int, int]],
         buffer_ms: int,
-        target_duration_ms: int = 10000  # Target 10 seconds for voice cloning
+        target_duration_ms: int = 10000
     ) -> AudioSegment:
         """
         Extract speech segments and stitch them together with buffers.
@@ -360,7 +360,7 @@ class VoiceCloningService:
             audio: Original AudioSegment
             segments: List of (start_ms, end_ms) tuples
             buffer_ms: Buffer duration to add between segments
-            target_duration_ms: Target duration in milliseconds (default: 10000ms = 10s)
+            target_duration_ms: Target duration in milliseconds (default: 10 seconds)
             
         Returns:
             Stitched AudioSegment
@@ -430,14 +430,11 @@ class VoiceCloningService:
             if not os.path.exists(audio_file_path):
                 raise FileNotFoundError(f"Audio file not found at: {audio_file_path}")
             
-            # Use user_id as the voice name
             voice_name = user_id
             
-            logger.info(f"Uploading audio to Cartesia for voice cloning: '{voice_name}'")
+            logger.info(f"Cloning voice with Cartesia: '{voice_name}'")
             
             # Clone the voice using Cartesia SDK
-            # mode="similarity" focuses on high resemblance to source audio
-            # enhance=True applies additional audio enhancement for better quality
             with open(audio_file_path, "rb") as file_handle:
                 response = self.cartesia.voices.clone(
                     clip=file_handle,

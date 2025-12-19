@@ -82,16 +82,16 @@ class HotTakeVideoGenerationService:
         add_captions: bool = True
     ) -> dict:
         """
-        Generate a video from a hot take and save video, audio, and timestamps locally.
+        Generate a video from a hot take and upload to Supabase storage.
         
         Process:
-        1. Get hot_take text and hedra_avatar_id from interview_call_analysis table
-        2. Get user_id from interview_calls table
-        3. Get voice_id from user_profiles table
+        1. Get hot_take text and hedra_avatar_id from interview_call_analysis
+        2. Get user_id from interview_calls
+        3. Get voice_id from user_profiles
         4. Generate audio from hot_take text using Cartesia (with word timestamps)
         5. Generate video using Hedra avatar and audio
-        6. Optionally add captions with word-by-word highlighting (using CaptionGenerator)
-        7. Save video, audio, and timestamps locally
+        6. Optionally add captions with word-by-word highlighting
+        7. Upload video to Supabase storage and update database
         
         Args:
             session_id: The LiveKit session ID
@@ -416,7 +416,7 @@ class HotTakeVideoGenerationService:
         hot_take_number: int = 1
     ) -> Tuple[str, List[Dict]]:
         """
-        Generate audio from text using Cartesia SSE endpoint with word timestamps.
+        Generate audio from text using Cartesia with word timestamps.
         
         Args:
             text: The text to convert to speech
@@ -426,7 +426,6 @@ class HotTakeVideoGenerationService:
             
         Returns:
             Tuple[str, List[Dict]]: (audio_file_path, word_timestamps)
-                word_timestamps format: [{"word": "hello", "start": 0.0, "end": 0.5}, ...]
             
         Raises:
             Exception: If audio generation fails
@@ -537,7 +536,7 @@ class HotTakeVideoGenerationService:
             
             logger.debug(f"Processed {event_count} SSE events, received {len(audio_chunks)} audio chunks ({len(raw_audio)} bytes) and {len(word_timestamps)} word timestamps")
             
-            # Convert raw PCM to WAV file - save to current directory for debugging
+            # Convert raw PCM to WAV file
             output_filename = f"hot_take_{hot_take_number}_audio_{session_id}.wav"
             output_path = os.path.join(os.getcwd(), output_filename)
             
@@ -737,12 +736,9 @@ class HotTakeVideoGenerationService:
         """
         Upload video to Supabase storage.
         
-        Videos are stored in the interview-hot-take-videos bucket with a flat structure:
-        hot_take_{hot_take_number}_{session_id}.mp4
-        
         Args:
             video_path: Local path to the video file
-            user_id: The user's ID (not used for storage path, kept for compatibility)
+            user_id: The user's ID
             session_id: The session ID
             hot_take_number: Which hot take this is (1 or 2)
             
