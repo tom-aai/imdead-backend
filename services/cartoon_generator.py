@@ -57,8 +57,9 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
 		1. Download original image from Supabase avatar-images-bucket
 		2. Send to Google Gemini for transformation
 		3. Upload transformed image back to Supabase storage
-		4. Update interview_calls.cartoon_id with cartoonized picture_id
-		5. Return new picture_id for use by Hedra
+		4. Update user_avatar_images.cartoon_id with cartoonized picture_id
+		5. Update interview_calls.cartoon_id with cartoonized picture_id
+		6. Return new picture_id for use by Hedra
 		
 		Args:
 			user_id: The user's ID
@@ -103,7 +104,14 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
 				original_picture_id=picture_id
 			)
 			
-			# Step 4: Update interview_calls.cartoon_id with cartoonized picture_id
+			# Step 4: Update user_avatar_images with cartoon_id
+			self._update_user_avatar_images(
+				user_id=user_id,
+				picture_id=picture_id,  # Original picture_id
+				cartoon_id=new_picture_id
+			)
+			
+			# Step 5: Update interview_calls.cartoon_id with cartoonized picture_id
 			self._update_interview_calls(
 				session_id=session_id,
 				cartoon_id=new_picture_id
@@ -279,6 +287,46 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
 		except Exception as e:
 			logger.error(f"Failed to upload cartoonized image to storage: {e}")
 			raise Exception(f"Storage upload failed: {e}")
+	
+	def _update_user_avatar_images(
+		self,
+		user_id: str,
+		picture_id: str,
+		cartoon_id: str
+	) -> dict:
+		"""
+		Update user_avatar_images table with cartoon_id.
+		
+		Updates the existing row (identified by user_id and picture_id) with the cartoon_id.
+		This keeps the original and cartoon versions linked in a single row.
+		
+		Args:
+			user_id: The user's ID
+			picture_id: The original picture ID
+			cartoon_id: The cartoonized picture ID
+			
+		Returns:
+			dict: The updated record from Supabase
+			
+		Raises:
+			Exception: If update fails
+		"""
+		try:
+			response = self.supabase.table("user_avatar_images")\
+				.update({"cartoon_id": cartoon_id})\
+				.eq("user_id", user_id)\
+				.eq("picture_id", picture_id)\
+				.execute()
+			
+			if response.data:
+				logger.debug(f"Updated user_avatar_images.cartoon_id for user {user_id}, picture {picture_id}")
+				return response.data[0]
+			else:
+				raise Exception(f"Failed to update user_avatar_images for user {user_id}, picture {picture_id}")
+				
+		except Exception as e:
+			logger.error(f"Failed to update user_avatar_images: {e}")
+			raise Exception(f"Database update failed: {e}")
 	
 	def _update_interview_calls(
 		self,

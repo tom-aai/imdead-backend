@@ -33,17 +33,18 @@ class HedraAvatarGenerator:
 	
 	def generate_avatar(self, user_id: str, picture_id: str, session_id: str) -> dict:
 		"""
-		Generate a Hedra avatar for a user based on their uploaded image.
+		Generate a Hedra avatar for a user based on their cartoonized image.
 		
 		Process:
-		1. Download image from Supabase avatar-images-bucket
-		2. Upload image to Hedra API
-		3. Update user_avatar_images table with hedra_avatar_id
-		4. Update interview_call_analysis table with hedra_avatar_id
+		1. Look up cartoon_id from user_avatar_images using the original picture_id
+		2. Download cartoon image from Supabase avatar-images-bucket
+		3. Upload image to Hedra API
+		4. Update user_avatar_images table with hedra_avatar_id
+		5. Update interview_call_analysis table with hedra_avatar_id
 		
 		Args:
 			user_id: The user's ID
-			picture_id: The picture ID from avatar-images-bucket
+			picture_id: The ORIGINAL picture ID (not the cartoon_id)
 			session_id: The LiveKit session ID
 			
 		Returns:
@@ -70,28 +71,36 @@ class HedraAvatarGenerator:
 		
 		logger.info(f"Generating Hedra avatar for user {user_id}, picture {picture_id}")
 		
-		# Step 1: Download image from Supabase storage
-		local_image_path = self._download_image_from_storage(picture_id)
+		# Step 1: Get cartoon_id from user_avatar_images
+		cartoon_id = self._get_cartoon_id(user_id, picture_id)
+		
+		if not cartoon_id:
+			raise ValueError(f"No cartoon_id found for user {user_id}, picture {picture_id}")
+		
+		logger.info(f"Using cartoon image: {cartoon_id}")
+		
+		# Step 2: Download cartoon image from Supabase storage
+		local_image_path = self._download_image_from_storage(cartoon_id)
 		
 		try:
-			# Step 2: Upload image to Hedra and get hedra_avatar_id
+			# Step 3: Upload image to Hedra and get hedra_avatar_id
 			hedra_avatar_id = self._upload_to_hedra(local_image_path)
 			
-			# Step 3: Update user_avatar_images table with hedra_avatar_id
+			# Step 4: Update user_avatar_images table with hedra_avatar_id
 			uploaded_record = self._update_user_avatar_images(
 				user_id=user_id,
 				session_id=session_id,
-				picture_id=picture_id,
+				picture_id=picture_id,  # Use original picture_id to find the record
 				hedra_avatar_id=hedra_avatar_id
 			)
 			
-			# Step 4: Update interview_call_analysis table with hedra_avatar_id
+			# Step 5: Update interview_call_analysis table with hedra_avatar_id
 			self._update_interview_analysis(
 				session_id=session_id,
 				hedra_avatar_id=hedra_avatar_id
 			)
 			
-			logger.info(f"Hedra avatar generation completed for picture {picture_id} (hedra_avatar_id: {hedra_avatar_id})")
+			logger.info(f"Hedra avatar generation completed for picture {picture_id}, cartoon {cartoon_id} (hedra_avatar_id: {hedra_avatar_id})")
 			
 			return {
 				"status": "success",
@@ -99,6 +108,7 @@ class HedraAvatarGenerator:
 				"session_id": session_id,
 				"user_id": user_id,
 				"picture_id": picture_id,
+				"cartoon_id": cartoon_id,
 				"hedra_avatar_id": hedra_avatar_id,
 				"record_id": uploaded_record.get('id')
 			}
@@ -111,6 +121,41 @@ class HedraAvatarGenerator:
 					logger.debug(f"Cleaned up temporary file: {local_image_path}")
 				except Exception as e:
 					logger.warning(f"Failed to clean up temporary file {local_image_path}: {e}")
+	
+	def _get_cartoon_id(self, user_id: str, picture_id: str) -> str:
+		"""
+		Get the cartoon_id from user_avatar_images table.
+		
+		Args:
+			user_id: The user's ID
+			picture_id: The original picture ID
+			
+		Returns:
+			str: The cartoon_id from the record
+			
+		Raises:
+			Exception: If lookup fails or cartoon_id not found
+		"""
+		try:
+			response = self.supabase.table("user_avatar_images")\
+				.select("cartoon_id")\
+				.eq("user_id", user_id)\
+				.eq("picture_id", picture_id)\
+				.execute()
+			
+			if not response.data:
+				raise Exception(f"No record found in user_avatar_images for user {user_id}, picture {picture_id}")
+			
+			cartoon_id = response.data[0].get("cartoon_id")
+			
+			if not cartoon_id:
+				raise Exception(f"No cartoon_id found in user_avatar_images for user {user_id}, picture {picture_id}")
+			
+			return cartoon_id
+			
+		except Exception as e:
+			logger.error(f"Failed to get cartoon_id: {e}")
+			raise
 	
 	def _download_image_from_storage(self, picture_id: str) -> str:
 		"""
@@ -248,7 +293,7 @@ class HedraAvatarGenerator:
 		Args:
 			user_id: The user's ID
 			session_id: The LiveKit session ID (needed for interview_call_analysis but not always for user_avatar_images)
-			picture_id: The picture ID from storage
+			picture_id: The ORIGINAL picture ID (not the cartoon_id) - used to find the record
 			hedra_avatar_id: The Hedra avatar ID
 			
 		Returns:

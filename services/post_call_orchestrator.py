@@ -322,24 +322,28 @@ class PostCallOrchestrator:
 		Returns:
 			dict: Hedra avatar generation result
 		"""
-		# Look up the user_id from the session
-		_, user_id = self._get_picture_and_user_from_session(session_id)
+		# Look up the original picture_id and user_id from the session
+		picture_id, user_id = self._get_picture_and_user_from_session(session_id)
 		
 		if not user_id:
 			raise ValueError(f"No user_id found for session {session_id}")
 		
-		# Get cartoon_id from interview_calls (prefer this over passed parameter)
+		if not picture_id:
+			raise ValueError(f"No picture_id found for session {session_id}")
+		
+		# Get cartoon_id from interview_calls to verify it exists
 		cartoon_id = self._get_cartoon_id_from_session(session_id)
 		
 		if not cartoon_id:
 			raise ValueError(f"No cartoon_id found for session {session_id}")
 		
-		logger.info(f"Using cartoonized image for Hedra avatar: {cartoon_id}")
+		logger.info(f"Using cartoonized image for Hedra avatar: {cartoon_id} (from original: {picture_id})")
 		
-		# Generate the Hedra avatar (will also update interview_call_analysis)
+		# Generate the Hedra avatar using the ORIGINAL picture_id
+		# HedraAvatarGenerator will look up the cartoon_id from user_avatar_images
 		return self.hedra_avatar_generator.generate_avatar(
 			user_id=user_id,
-			picture_id=cartoon_id,
+			picture_id=picture_id,  # Pass original picture_id, not cartoon_id
 			session_id=session_id
 		)
 	
