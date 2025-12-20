@@ -274,18 +274,22 @@ class TestTaskMethods:
         """Test _cartoonize_image calls CartoonGenerator."""
         orchestrator = PostCallOrchestrator(
             supabase_client=mock_supabase,
-            google_api_key="google-key"
+            google_api_key="google-key",
+            hedra_api_key="hedra-key",
+            cartesia_api_key="cartesia-key"
         )
         
-        # Mock database lookup
-        mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
-            {'picture_id': 'pic.jpg', 'user_id': 'user-456'}
-        ]
-        
-        with patch.object(orchestrator.cartoon_generator, 'cartoonize_image', return_value={'result': 'ok'}):
-            result = orchestrator._cartoonize_image('session-123')
-            
-            assert result == {'result': 'ok'}
+        # Mock the helper method to return picture and user data
+        with patch.object(orchestrator, '_get_picture_and_user_from_session', return_value=('pic.jpg', 'user-456')):
+            with patch.object(orchestrator.cartoon_generator, 'cartoonize_image', return_value={'result': 'ok'}):
+                result = orchestrator._cartoonize_image('session-123')
+                
+                assert result == {'result': 'ok'}
+                orchestrator.cartoon_generator.cartoonize_image.assert_called_once_with(
+                    user_id='user-456',
+                    picture_id='pic.jpg',
+                    session_id='session-123'
+                )
     
     def test_generate_hedra_avatar(self, mock_supabase):
         """Test _generate_hedra_avatar calls HedraAvatarGenerator."""

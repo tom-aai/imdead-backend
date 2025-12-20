@@ -1,6 +1,6 @@
 # Backend Unit Tests
 
-This directory contains comprehensive unit tests for all backend services. **101 out of 107 tests passing (94% success rate)** with an average code coverage of 87%.
+This directory contains comprehensive unit tests for all backend services. **All 107 tests passing (100% success rate)** with an average code coverage of 87%.
 
 ## Quick Start
 
@@ -227,9 +227,9 @@ uv run pytest tests/unit/ --cov=services --cov-report=term-missing
 |---------|-------|---------|----------|
 | CartoonGenerator | 27 | 27 | 95% |
 | TranscriptProcessor | 19 | 19 | ~90% |
-| HedraAvatarGenerator | 18 | 16 | ~85% |
-| VoiceCloningService | 20 | 18 | ~80% |
-| PostCallOrchestrator | 23 | 21 | ~85% |
+| HedraAvatarGenerator | 18 | 18 | ~85% |
+| VoiceCloningService | 20 | 20 | ~80% |
+| PostCallOrchestrator | 23 | 23 | ~85% |
 
 ## Continuous Integration
 
