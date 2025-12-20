@@ -15,7 +15,7 @@ from supabase import create_client
 # Add parent directory to path to import services
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.post_call_orchestrator import PostCallOrchestrator
-from services.hedra_avatar_generation import HedraAvatarGenerator
+from services.hedra_avatar_id_generator import HedraAvatarGenerator
 
 # Configure logging
 logging.basicConfig(

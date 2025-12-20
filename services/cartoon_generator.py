@@ -22,7 +22,7 @@ class CartoonGenerator:
 
 Depict the person from the chest up, centered, with a calm, thoughtful expression and a neutral, authoritative presence. The person must be facing forward because the image will be used to generate a talking avatar. Use a clean, professional editorial illustration style inspired by high-end magazine opinion art.
 
-Simplify facial features slightly while preserving identity. Avoid photorealism. Use confident line work, subtle cross-hatching or soft shading, and restrained detail. Skin texture should be smooth and illustrated, not realistic.
+Simplify facial features slightly while preserving identity. Avoid photorealism. Use confident line work, subtle cross-hatching or soft shading, and restrained detail. Skin texture should be smooth and illustrated, not realistic. Be subtly flattering, making the person look a little younger and little more attractive, but not so much that the output appears like a different person.
 
 The pose should feel composed and timeless, as if the subject is an expert explaining a complex idea. No exaggerated emotion. No stylized "cool" effects.
 

@@ -7,12 +7,12 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional
 
-from services.transcript_processing import TranscriptProcessor
-from services.profile_aggregation import ProfileAggregator
+from services.transcript_processor import TranscriptProcessor
+from services.profile_aggregator import ProfileAggregator
 from services.cartoon_generator import CartoonGenerator
-from services.hedra_avatar_generation import HedraAvatarGenerator
-from services.clone_voice import VoiceCloningService
-from services.hot_take_video_generation import HotTakeVideoGenerationService
+from services.hedra_avatar_id_generator import HedraAvatarGenerator
+from services.voice_cloner import VoiceCloningService
+from services.hot_take_video_generator import HotTakeVideoGenerationService
 
 logger = logging.getLogger(__name__)
 

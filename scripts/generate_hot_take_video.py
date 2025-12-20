@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 # Add parent directory to path to import services
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from services.hot_take_video_generation import HotTakeVideoGenerationService
+from services.hot_take_video_generator import HotTakeVideoGenerationService
 from supabase import create_client
 
 logging.basicConfig(

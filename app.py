@@ -7,7 +7,7 @@ from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-from services.hedra_avatar_generation import HedraAvatarGenerator
+from services.hedra_avatar_id_generator import HedraAvatarGenerator
 
 # Load environment variables: prefer .env.local, fallback to default .env if present
 _loaded = load_dotenv(".env.local")
