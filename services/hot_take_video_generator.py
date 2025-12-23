@@ -749,8 +749,7 @@ class HotTakeVideoGenerationService:
             Exception: If upload fails
         """
         try:
-            # Construct the storage path (flat structure)
-            storage_path = f"hot_take_{hot_take_number}_{session_id}.mp4"
+            storage_path = f"{user_id}/hot_take_{hot_take_number}_{session_id}.mp4"
             
             logger.debug(f"Uploading video to Supabase storage: {storage_path}")
             

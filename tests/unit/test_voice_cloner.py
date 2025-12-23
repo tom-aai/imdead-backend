@@ -48,7 +48,7 @@ class TestProcessVoiceRecording:
         service.cartesia = mock_cartesia_client
         
         # Mock the internal methods to avoid complex mock chaining
-        with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding')):
+        with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding', 'user-456')):
             with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
                 with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
                     with patch.object(service, '_get_user_id_from_session', return_value='user-456'):
@@ -67,7 +67,7 @@ class TestProcessVoiceRecording:
         service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
         
         # Mock _get_recording_info to return interview call
-        with patch.object(service, '_get_recording_info', return_value=('rec-123', 'interview')):
+        with patch.object(service, '_get_recording_info', return_value=('rec-123', 'interview', 'user-456')):
             result = service.process_voice_recording('session-123')
             
             assert result['status'] == 'skipped'
@@ -84,7 +84,7 @@ class TestProcessVoiceRecording:
     def test_no_recording_found(self, mock_supabase):
         """Test error when no recording_id found."""
         mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
-            {'recording_id': None, 'call_type': 'onboarding'}
+            {'recording_id': None, 'call_type': 'onboarding', 'user_id': 'user-456'}
         ]
         
         service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
@@ -99,25 +99,27 @@ class TestGetRecordingInfo:
     def test_successful_lookup(self, mock_supabase):
         """Test successful recording info lookup."""
         mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
-            {'recording_id': 'rec-456', 'call_type': 'onboarding'}
+            {'recording_id': 'rec-456', 'call_type': 'onboarding', 'user_id': 'user-789'}
         ]
         
         service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
-        recording_id, call_type = service._get_recording_info('session-123')
+        recording_id, call_type, user_id = service._get_recording_info('session-123')
         
         assert recording_id == 'rec-456'
         assert call_type == 'onboarding'
+        assert user_id == 'user-789'
     
     def test_default_call_type(self, mock_supabase):
         """Test default call_type when not specified."""
         mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
-            {'recording_id': 'rec-456'}
+            {'recording_id': 'rec-456', 'user_id': 'user-789'}
         ]
         
         service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
-        recording_id, call_type = service._get_recording_info('session-123')
+        recording_id, call_type, user_id = service._get_recording_info('session-123')
         
         assert call_type == 'interview'  # Default
+        assert user_id == 'user-789'
     
     def test_call_not_found(self, mock_supabase):
         """Test error when call not found."""
@@ -138,7 +140,7 @@ class TestDownloadRecording:
         mock_supabase.storage.from_.return_value.download.return_value = fake_audio
         
         service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
-        result_path = service._download_recording('rec-123')
+        result_path = service._download_recording('rec-123', 'user-456')
         
         try:
             assert os.path.exists(result_path)
@@ -150,6 +152,7 @@ class TestDownloadRecording:
             
             # Verify correct bucket and path
             mock_supabase.storage.from_.assert_called_with("interview-recordings")
+            mock_supabase.storage.from_.return_value.download.assert_called_with("user-456/rec-123.mp4")
             
         finally:
             if os.path.exists(result_path):
@@ -162,7 +165,7 @@ class TestDownloadRecording:
         service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
         
         with pytest.raises(Exception, match="Empty response downloading recording"):
-            service._download_recording('rec-123')
+            service._download_recording('rec-123', 'user-456')
 
 
 class TestCloneVoiceWithCartesia:

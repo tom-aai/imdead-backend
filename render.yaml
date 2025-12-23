@@ -20,6 +20,8 @@ services:
         sync: false  # Set in Render dashboard
       - key: CARTESIA_API_KEY
         sync: false  # Set in Render dashboard
+      - key: BACKEND_API_KEY
+        sync: false  # Set in Render dashboard - shared secret for agent authentication
     healthCheckPath: /health
 
   # Background Worker for Processing Jobs

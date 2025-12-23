@@ -2,6 +2,7 @@ import os
 import logging
 import threading
 import uuid
+from functools import wraps
 
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
@@ -15,6 +16,24 @@ if not _loaded:
 	load_dotenv()
 
 app = Flask(__name__)
+
+# API key for authenticating internal service calls (agent → backend)
+BACKEND_API_KEY = os.getenv("BACKEND_API_KEY")
+
+def require_api_key(f):
+	"""Decorator to require API key authentication for endpoints."""
+	@wraps(f)
+	def decorated(*args, **kwargs):
+		if not BACKEND_API_KEY:
+			# If no API key is configured, log warning but allow (for local dev)
+			logging.warning("BACKEND_API_KEY not configured - endpoint is unprotected")
+			return f(*args, **kwargs)
+		
+		api_key = request.headers.get('X-API-Key')
+		if not api_key or api_key != BACKEND_API_KEY:
+			return jsonify({"error": "Unauthorized"}), 401
+		return f(*args, **kwargs)
+	return decorated
 
 # Configure logging
 logging.basicConfig(
@@ -63,6 +82,7 @@ def health():
 
 
 @app.route("/post-call-orchestrator", methods=["POST"])
+@require_api_key
 def post_call_orchestrator_endpoint():
 	"""
 	Orchestrate all post-call processing after a call completes.
@@ -111,6 +131,7 @@ def post_call_orchestrator_endpoint():
 
 
 @app.route("/jobs/<job_id>", methods=["GET"])
+@require_api_key
 def get_job_status(job_id: str):
 	"""
 	Get the status of a background job.
@@ -176,6 +197,7 @@ def _run_avatar_generation_in_background(user_id: str, picture_id: str, session_
 
 
 @app.route("/upload-avatar-image", methods=["POST"])
+@require_api_key
 def upload_avatar_image_endpoint():
 	"""
 	Upload an avatar image for a user and automatically generate Hedra avatar.
@@ -283,6 +305,7 @@ def upload_avatar_image_endpoint():
 
 
 @app.route("/generate-avatar", methods=["POST"])
+@require_api_key
 def generate_avatar_endpoint():
 	"""
 	Regenerate a Hedra avatar for an existing picture.
