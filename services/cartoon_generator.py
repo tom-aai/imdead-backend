@@ -91,7 +91,8 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
         logger.info(f"Cartoonizing image for user {user_id}, picture {picture_id}")
         
         # Step 1: Download original image from Supabase storage
-        local_image_path = self._download_image_from_storage(picture_id)
+        # Storage path is {user_id}/{picture_id} as set by frontend
+        local_image_path = self._download_image_from_storage(picture_id, user_id)
         cartoonized_image_path = None  # Initialize to avoid cleanup errors
         
         try:
@@ -138,12 +139,13 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
                     except Exception as e:
                         logger.warning(f"Failed to clean up temporary file {path}: {e}")
     
-    def _download_image_from_storage(self, picture_id: str) -> str:
+    def _download_image_from_storage(self, picture_id: str, user_id: str = None) -> str:
         """
         Download image from Supabase storage bucket.
         
         Args:
             picture_id: The picture filename/path in the storage bucket
+            user_id: The user's ID (used as path prefix in storage)
             
         Returns:
             str: Path to downloaded temporary file
@@ -152,10 +154,12 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
             Exception: If download fails
         """
         try:
-            logger.debug(f"Downloading image {picture_id} from avatar-images-bucket")
+            # Build the full storage path: {user_id}/{picture_id}
+            storage_path = f"{user_id}/{picture_id}" if user_id else picture_id
+            logger.debug(f"Downloading image {storage_path} from avatar-images-bucket")
             
             # Download from Supabase storage
-            response = self.supabase.storage.from_("avatar-images-bucket").download(picture_id)
+            response = self.supabase.storage.from_("avatar-images-bucket").download(storage_path)
             
             if not response:
                 raise Exception(f"Empty response downloading image {picture_id}")
@@ -170,8 +174,8 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
             return temp_file.name
             
         except Exception as e:
-            logger.error(f"Failed to download image '{picture_id}' from storage: {e}")
-            raise Exception(f"Image download failed for '{picture_id}': {e}")
+            logger.error(f"Failed to download image '{storage_path}' from storage: {e}")
+            raise Exception(f"Image download failed for '{storage_path}': {e}")
     
     def _transform_with_gemini(self, image_path: str) -> str:
         """

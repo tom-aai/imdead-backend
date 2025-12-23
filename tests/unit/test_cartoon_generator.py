@@ -213,6 +213,21 @@ class TestDownloadImageFromStorage:
             finally:
                 if os.path.exists(result_path):
                     os.unlink(result_path)
+    
+    def test_download_with_user_id_path(self, mock_supabase, create_test_image_bytes):
+        """Test download uses user_id as path prefix when provided."""
+        image_bytes = create_test_image_bytes(format='PNG')
+        mock_supabase.storage.from_.return_value.download.return_value = image_bytes
+        
+        generator = CartoonGenerator(mock_supabase, google_api_key="test-key")
+        result_path = generator._download_image_from_storage('test-pic.png', user_id='user-123')
+        
+        try:
+            # Verify the storage download was called with the full path including user_id
+            mock_supabase.storage.from_.return_value.download.assert_called_with('user-123/test-pic.png')
+        finally:
+            if os.path.exists(result_path):
+                os.unlink(result_path)
 
 
 class TestTransformWithGemini:
