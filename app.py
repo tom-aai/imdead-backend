@@ -19,15 +19,21 @@ app = Flask(__name__)
 
 # API key for authenticating internal service calls (agent → backend)
 BACKEND_API_KEY = os.getenv("BACKEND_API_KEY")
+FLASK_ENV = os.getenv("FLASK_ENV", "production")
 
 def require_api_key(f):
 	"""Decorator to require API key authentication for endpoints."""
 	@wraps(f)
 	def decorated(*args, **kwargs):
 		if not BACKEND_API_KEY:
-			# If no API key is configured, log warning but allow (for local dev)
-			logging.warning("BACKEND_API_KEY not configured - endpoint is unprotected")
-			return f(*args, **kwargs)
+			if FLASK_ENV == "development":
+				# Allow unauthenticated requests in local development
+				logging.warning("BACKEND_API_KEY not configured - allowing request (development mode)")
+				return f(*args, **kwargs)
+			else:
+				# Reject in production if API key is not configured
+				logging.error("BACKEND_API_KEY not configured - rejecting request")
+				return jsonify({"error": "Server misconfigured"}), 500
 		
 		api_key = request.headers.get('X-API-Key')
 		if not api_key or api_key != BACKEND_API_KEY:
