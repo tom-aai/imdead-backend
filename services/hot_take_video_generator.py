@@ -75,7 +75,7 @@ class HotTakeVideoGenerationService:
         self,
         session_id: str,
         text_prompt: str = "professional interview conversation",
-        aspect_ratio: str = "16:9",
+        aspect_ratio: str = "9:16",
         resolution: str = "720p",
         hot_take_number: int = 1,
         output_dir: str = None,
