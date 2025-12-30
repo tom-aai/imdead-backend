@@ -609,14 +609,29 @@ class HotTakeVideoGenerationService:
             if not status_data.get("download_url"):
                 raise Exception("No download URL found in the response")
             
+            # Download to a temporary file first
+            temp_download_path = os.path.join(
+                tempfile.gettempdir(),
+                f"hot_take_{hot_take_number}_video_{session_id}_raw.mp4"
+            )
+            
+            self._download_video(status_data["download_url"], temp_download_path)
+            
+            # Step 5: Crop video to 9:16 aspect ratio for social media
             output_filename = os.path.join(
                 tempfile.gettempdir(),
                 f"hot_take_{hot_take_number}_video_{session_id}.mp4"
             )
             
-            self._download_video(status_data["download_url"], output_filename)
+            self._crop_video_to_9_16(temp_download_path, output_filename)
             
-            logger.debug(f"Video saved to {output_filename}")
+            # Clean up the raw downloaded video
+            try:
+                os.unlink(temp_download_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up raw video: {e}")
+            
+            logger.debug(f"Video cropped and saved to {output_filename}")
             return output_filename
             
         except Exception as e:
@@ -828,4 +843,121 @@ class HotTakeVideoGenerationService:
         except IOError as e:
             logger.error(f"Failed to save video file: {e}")
             raise
+    
+    def _crop_video_to_9_16(self, input_path: str, output_path: str = None) -> str:
+        """
+        Crop video to 9:16 aspect ratio (vertical format for social media).
+        
+        Uses center-crop to extract the 9:16 portion from the video.
+        If the video is already 9:16 or narrower, it will be padded with black bars.
+        
+        Args:
+            input_path: Path to the input video file
+            output_path: Path for the output video (optional, auto-generated if not provided)
+            
+        Returns:
+            str: Path to the cropped video file
+            
+        Raises:
+            Exception: If cropping fails
+        """
+        import subprocess
+        import json as json_module
+        
+        try:
+            logger.info(f"Cropping video to 9:16 aspect ratio: {input_path}")
+            
+            # Generate output path if not provided
+            if output_path is None:
+                base_name = os.path.splitext(input_path)[0]
+                output_path = f"{base_name}_9x16.mp4"
+            
+            # Get video dimensions using ffprobe
+            probe_cmd = [
+                'ffprobe',
+                '-v', 'error',
+                '-select_streams', 'v:0',
+                '-show_entries', 'stream=width,height',
+                '-of', 'json',
+                input_path
+            ]
+            
+            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
+            
+            if probe_result.returncode != 0:
+                logger.error(f"ffprobe failed: {probe_result.stderr}")
+                raise Exception(f"Failed to probe video: {probe_result.stderr}")
+            
+            probe_data = json_module.loads(probe_result.stdout)
+            input_width = probe_data['streams'][0]['width']
+            input_height = probe_data['streams'][0]['height']
+            
+            logger.debug(f"Input video dimensions: {input_width}x{input_height}")
+            
+            # Calculate target 9:16 dimensions
+            # Target aspect ratio: 9/16 = 0.5625
+            target_aspect = 9 / 16
+            input_aspect = input_width / input_height
+            
+            if abs(input_aspect - target_aspect) < 0.01:
+                # Already 9:16, just copy
+                logger.debug("Video is already 9:16, copying without modification")
+                import shutil
+                shutil.copy2(input_path, output_path)
+                return output_path
+            
+            if input_aspect > target_aspect:
+                # Video is wider than 9:16, crop width (center crop)
+                # Keep full height, calculate new width
+                new_width = int(input_height * target_aspect)
+                new_width = new_width - (new_width % 2)  # Ensure even number
+                new_height = input_height
+                x_offset = (input_width - new_width) // 2
+                y_offset = 0
+                crop_filter = f"crop={new_width}:{new_height}:{x_offset}:{y_offset}"
+                logger.debug(f"Cropping width: {input_width} -> {new_width} (center crop)")
+            else:
+                # Video is taller than 9:16, crop height (center crop)
+                # Keep full width, calculate new height
+                new_width = input_width
+                new_height = int(input_width / target_aspect)
+                new_height = new_height - (new_height % 2)  # Ensure even number
+                x_offset = 0
+                y_offset = (input_height - new_height) // 2
+                crop_filter = f"crop={new_width}:{new_height}:{x_offset}:{y_offset}"
+                logger.debug(f"Cropping height: {input_height} -> {new_height} (center crop)")
+            
+            # Build ffmpeg command
+            cmd = [
+                'ffmpeg',
+                '-i', input_path,
+                '-vf', crop_filter,
+                '-codec:a', 'copy',  # Copy audio stream as-is
+                '-codec:v', 'libx264',
+                '-crf', '18',  # High quality
+                '-preset', 'medium',
+                '-y',  # Overwrite output file
+                output_path
+            ]
+            
+            logger.debug(f"Running ffmpeg with crop filter: {crop_filter}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                logger.error(f"ffmpeg crop failed: {result.stderr}")
+                raise Exception(f"ffmpeg crop failed: {result.stderr}")
+            
+            # Verify output
+            if not os.path.exists(output_path):
+                raise Exception("Cropped output file was not created")
+            
+            file_size = os.path.getsize(output_path)
+            logger.info(f"Video cropped to 9:16: {output_path} ({file_size / 1024 / 1024:.2f} MB)")
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Failed to crop video to 9:16: {e}")
+            raise Exception(f"Video cropping failed: {e}")
 
