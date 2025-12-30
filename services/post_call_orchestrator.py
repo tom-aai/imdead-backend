@@ -12,7 +12,6 @@ from services.profile_aggregator import ProfileAggregator
 from services.cartoon_generator import CartoonGenerator
 from services.hedra_avatar_id_generator import HedraAvatarGenerator
 from services.voice_cloner import VoiceCloningService
-from services.hot_take_video_generator import HotTakeVideoGenerationService
 
 logger = logging.getLogger(__name__)
 
@@ -40,19 +39,19 @@ class PostCallOrchestrator:
         self.cartoon_generator = CartoonGenerator(supabase_client, google_api_key)
         self.hedra_avatar_generator = HedraAvatarGenerator(supabase_client, hedra_api_key)
         self.voice_cloning_service = VoiceCloningService(supabase_client, cartesia_api_key)
-        self.hot_take_video_service = HotTakeVideoGenerationService(supabase_client, cartesia_api_key, hedra_api_key)
     
     async def process_call_completion(self, session_id: str) -> Dict[str, Any]:
         """
         Orchestrate all post-call processing tasks for a completed call.
         
         Tasks:
-        - Transcript processing and analysis
+        - Transcript processing and analysis (populates hot_take_1, hot_take_2 text)
         - User profile aggregation
         - Image cartoonization (transform to editorial illustration)
         - Hedra avatar generation from cartoonized image
         - Voice recording processing for voice cloning
-        - Hot take video generation (2 videos)
+        
+        Note: Hot take video generation is triggered manually by users from the dashboard.
         
         Args:
             session_id: The LiveKit session ID
@@ -115,23 +114,9 @@ class PostCallOrchestrator:
             )
             results["tasks"]["voice_cloning"] = voice_cloning_result
             
-            # Task 6: Generate hot take video #1
-            hot_take_1_result = await self._run_with_retry(
-                task_name="hot_take_video_1",
-                task_func=self._generate_hot_take_video_1,
-                session_id=session_id,
-                max_retries=3
-            )
-            results["tasks"]["hot_take_video_1"] = hot_take_1_result
-            
-            # Task 7: Generate hot take video #2
-            hot_take_2_result = await self._run_with_retry(
-                task_name="hot_take_video_2",
-                task_func=self._generate_hot_take_video_2,
-                session_id=session_id,
-                max_retries=3
-            )
-            results["tasks"]["hot_take_video_2"] = hot_take_2_result
+            # Note: Hot take video generation (previously Tasks 6 & 7) is now user-triggered
+            # from the dashboard. The hot_take_1 and hot_take_2 text is populated by
+            # transcript_processing and can be edited by users before generating videos.
             
             logger.info(f"Post-call orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
             
@@ -361,36 +346,4 @@ class PostCallOrchestrator:
             dict: Voice processing result
         """
         return self.voice_cloning_service.process_voice_recording(session_id)
-    
-    def _generate_hot_take_video_1(self, session_id: str) -> dict:
-        """
-        Generate hot take video #1 from interview analysis.
-        
-        Args:
-            session_id: The LiveKit session ID
-            
-        Returns:
-            dict: Hot take video generation result
-        """
-        return self.hot_take_video_service.generate_hot_take_video(
-            session_id=session_id,
-            hot_take_number=1
-        )
-    
-    def _generate_hot_take_video_2(self, session_id: str) -> dict:
-        """
-        Generate hot take video #2 from interview analysis.
-        
-        Args:
-            session_id: The LiveKit session ID
-            
-        Returns:
-            dict: Hot take video generation result
-        """
-        return self.hot_take_video_service.generate_hot_take_video(
-            session_id=session_id,
-            hot_take_number=2
-        )
-    
-
 

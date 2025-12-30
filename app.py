@@ -105,9 +105,10 @@ def post_call_orchestrator_endpoint():
 		if not session_id:
 			return jsonify({"error": "session_id is required"}), 400
 		
-		# Enqueue job in Supabase
+		# Enqueue job in Supabase with job_type
 		job_data = {
 			"session_id": session_id,
+			"job_type": "post_call",
 			"status": "pending",
 			"attempts": 0,
 			"max_attempts": 3
@@ -364,6 +365,194 @@ def generate_avatar_endpoint():
 	except Exception as e:
 		# Handle unexpected errors
 		logger.error(f"Error starting avatar generation: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+def _verify_supabase_user(auth_header: str) -> dict | None:
+	"""
+	Verify a Supabase JWT token and return the user info.
+	
+	Args:
+		auth_header: The Authorization header value (Bearer <token>)
+		
+	Returns:
+		dict: User info if valid, None otherwise
+	"""
+	if not auth_header or not auth_header.startswith('Bearer '):
+		return None
+	
+	token = auth_header.replace('Bearer ', '')
+	
+	try:
+		# Use Supabase to verify the token and get user info
+		user_response = supabase.auth.get_user(token)
+		if user_response and user_response.user:
+			return {
+				"id": user_response.user.id,
+				"email": user_response.user.email
+			}
+		return None
+	except Exception as e:
+		logger.warning(f"Failed to verify Supabase token: {e}")
+		return None
+
+
+@app.route("/generate-hot-take-video", methods=["POST"])
+def generate_hot_take_video_endpoint():
+	"""
+	Generate a hot take video for a session. Called from the frontend dashboard.
+	
+	This endpoint is authenticated via Supabase JWT token (user auth).
+	It enqueues a job in the post_call_jobs table with job_type='hot_take' for async processing.
+	
+	Required fields:
+	- session_id: The LiveKit session ID
+	- hot_take_number: Which hot take (1 or 2)
+	- hot_take_text: The (possibly edited) hot take text
+	
+	Returns:
+	- job_id: UUID of the enqueued job for status polling
+	"""
+	try:
+		# Verify user authentication via Supabase JWT
+		auth_header = request.headers.get('Authorization')
+		user = _verify_supabase_user(auth_header)
+		
+		if not user:
+			return jsonify({"error": "Unauthorized"}), 401
+		
+		user_id = user["id"]
+		
+		# Get request data
+		data = request.get_json()
+		session_id = data.get("session_id")
+		hot_take_number = data.get("hot_take_number")
+		hot_take_text = data.get("hot_take_text")
+		
+		if not session_id:
+			return jsonify({"error": "session_id is required"}), 400
+		
+		if hot_take_number not in [1, 2]:
+			return jsonify({"error": "hot_take_number must be 1 or 2"}), 400
+		
+		if not hot_take_text or not hot_take_text.strip():
+			return jsonify({"error": "hot_take_text is required"}), 400
+		
+		# Verify the session belongs to this user
+		session_response = supabase.table("interview_call_analysis")\
+			.select("user_id")\
+			.eq("session_id", session_id)\
+			.limit(1)\
+			.execute()
+		
+		if not session_response.data or len(session_response.data) == 0:
+			return jsonify({"error": "Session not found"}), 404
+		
+		session_user_id = session_response.data[0].get("user_id")
+		if session_user_id != user_id:
+			return jsonify({"error": "Unauthorized - session belongs to another user"}), 403
+		
+		# Update the hot_take text in interview_call_analysis (in case it was edited)
+		hot_take_column = f"hot_take_{hot_take_number}"
+		supabase.table("interview_call_analysis")\
+			.update({hot_take_column: hot_take_text.strip()})\
+			.eq("session_id", session_id)\
+			.execute()
+		
+		logger.info(f"Updated {hot_take_column} for session {session_id}")
+		
+		# Enqueue hot take video generation job in post_call_jobs with job_type='hot_take'
+		job_record = {
+			"session_id": session_id,
+			"job_type": "hot_take",
+			"job_data": {"hot_take_number": hot_take_number, "user_id": user_id},
+			"status": "pending",
+			"attempts": 0,
+			"max_attempts": 3
+		}
+		
+		job_response = supabase.table("post_call_jobs").insert(job_record).execute()
+		
+		if not job_response.data:
+			raise Exception("Failed to enqueue hot take job")
+		
+		job_id = job_response.data[0].get('id')
+		
+		logger.info(f"Hot take video job enqueued for session {session_id}, hot_take_{hot_take_number} (job_id: {job_id})")
+		
+		return jsonify({
+			"status": "queued",
+			"message": f"Hot take video {hot_take_number} generation job enqueued",
+			"job_id": job_id,
+			"session_id": session_id,
+			"hot_take_number": hot_take_number
+		}), 202
+		
+	except Exception as e:
+		logger.error(f"Error enqueuing hot take video generation: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/hot-take-jobs/<job_id>", methods=["GET"])
+def get_hot_take_job_status(job_id: str):
+	"""
+	Get the status of a hot take video generation job.
+	
+	Authenticated via Supabase JWT token.
+	Queries the post_call_jobs table for jobs with job_type='hot_take'.
+	
+	Args:
+		job_id: UUID of the job
+		
+	Returns:
+		Job status information including current state, attempts, and result/error
+	"""
+	try:
+		# Verify user authentication via Supabase JWT
+		auth_header = request.headers.get('Authorization')
+		user = _verify_supabase_user(auth_header)
+		
+		if not user:
+			return jsonify({"error": "Unauthorized"}), 401
+		
+		user_id = user["id"]
+		
+		# Fetch the job from post_call_jobs
+		response = supabase.table("post_call_jobs")\
+			.select("*")\
+			.eq("id", job_id)\
+			.eq("job_type", "hot_take")\
+			.limit(1)\
+			.execute()
+		
+		if not response.data or len(response.data) == 0:
+			return jsonify({"error": "Job not found"}), 404
+		
+		job = response.data[0]
+		job_data = job.get("job_data") or {}
+		
+		# Verify job belongs to this user (user_id is stored in job_data for hot_take jobs)
+		job_user_id = job_data.get("user_id")
+		if job_user_id != user_id:
+			return jsonify({"error": "Unauthorized - job belongs to another user"}), 403
+		
+		return jsonify({
+			"job_id": job['id'],
+			"session_id": job['session_id'],
+			"job_type": job.get('job_type'),
+			"hot_take_number": job_data.get('hot_take_number'),
+			"status": job['status'],
+			"attempts": job['attempts'],
+			"max_attempts": job['max_attempts'],
+			"error": job.get('error'),
+			"result": job.get('result'),
+			"created_at": job['created_at'],
+			"started_at": job.get('started_at'),
+			"completed_at": job.get('completed_at')
+		}), 200
+		
+	except Exception as e:
+		logger.error(f"Error fetching hot take job status: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
 
