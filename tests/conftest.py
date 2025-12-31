@@ -70,8 +70,7 @@ def sample_analysis_data():
         'myers_briggs_code': 'INTJ',
         'personality': 'Analytical and strategic thinker',
         'expertise_description': 'Expert in machine learning and AI systems',
-        'hot_take_1': 'AI will revolutionize healthcare within 5 years',
-        'social_post_draft': 'Just had a great conversation about AI...'
+        'hot_take_1': 'AI will revolutionize healthcare within 5 years'
     }
 
 

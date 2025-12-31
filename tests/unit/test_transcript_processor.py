@@ -66,8 +66,7 @@ class TestProcessTranscript:
                 'myers_briggs_code': 'INTJ',
                 'personality': 'Analytical',
                 'expertise_description': 'AI Expert',
-                'hot_take_1': 'AI will change everything',
-                'social_post_draft': 'Great AI discussion...'
+                'hot_take_1': 'AI will change everything'
             }
             
             result = processor.process_transcript(sample_call_data['session_id'])
@@ -346,7 +345,7 @@ class TestUploadToSupabase:
         expected_fields = [
             'session_id', 'user_id', 'user_firstname', 'user_lastname', 'created_at',
             'main_topic', 'conversation_narrative', 'myers_briggs_code', 'personality',
-            'expertise_description', 'hot_take_1', 'social_post_draft',
+            'expertise_description', 'hot_take_1',
             'hedra_avatar_id', 'hot_take_video_1'
         ]
         
