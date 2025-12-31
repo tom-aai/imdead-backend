@@ -35,7 +35,6 @@ class TestPostCallOrchestratorInit:
         assert orchestrator.cartoon_generator is not None
         assert orchestrator.hedra_avatar_generator is not None
         assert orchestrator.voice_cloning_service is not None
-        assert orchestrator.hot_take_video_service is not None
 
 
 class TestProcessCallCompletion:
@@ -58,21 +57,17 @@ class TestProcessCallCompletion:
                 with patch.object(orchestrator, '_cartoonize_image', return_value={'cartoonized_picture_id': 'cartoon.png'}):
                     with patch.object(orchestrator, '_generate_hedra_avatar', return_value={'hedra_id': '123'}):
                         with patch.object(orchestrator, '_process_voice_recording', return_value={'voice_id': 'voice-123'}):
-                            with patch.object(orchestrator, '_generate_hot_take_video_1', return_value={'video': 'video1.mp4'}):
-                                with patch.object(orchestrator, '_generate_hot_take_video_2', return_value={'video': 'video2.mp4'}):
-                                    
-                                    result = await orchestrator.process_call_completion('session-123')
-                                    
-                                    assert result['status'] == 'success'
-                                    assert result['session_id'] == 'session-123'
-                                    assert len(result['tasks']) == 7
-                                    assert 'transcript_processing' in result['tasks']
-                                    assert 'profile_aggregation' in result['tasks']
-                                    assert 'image_cartoonization' in result['tasks']
-                                    assert 'hedra_avatar_generation' in result['tasks']
-                                    assert 'voice_cloning' in result['tasks']
-                                    assert 'hot_take_video_1' in result['tasks']
-                                    assert 'hot_take_video_2' in result['tasks']
+                            
+                            result = await orchestrator.process_call_completion('session-123')
+                            
+                            assert result['status'] == 'success'
+                            assert result['session_id'] == 'session-123'
+                            assert len(result['tasks']) == 5
+                            assert 'transcript_processing' in result['tasks']
+                            assert 'profile_aggregation' in result['tasks']
+                            assert 'image_cartoonization' in result['tasks']
+                            assert 'hedra_avatar_generation' in result['tasks']
+                            assert 'voice_cloning' in result['tasks']
     
     @pytest.mark.asyncio
     async def test_orchestration_partial_failure(self, mock_supabase):
@@ -91,18 +86,16 @@ class TestProcessCallCompletion:
                 with patch.object(orchestrator, '_cartoonize_image', return_value={'cartoonized_picture_id': 'cartoon.png'}):
                     with patch.object(orchestrator, '_generate_hedra_avatar', return_value={'hedra_id': '123'}):
                         with patch.object(orchestrator, '_process_voice_recording', return_value={'voice_id': 'voice-123'}):
-                            with patch.object(orchestrator, '_generate_hot_take_video_1', return_value={'video': 'video1.mp4'}):
-                                with patch.object(orchestrator, '_generate_hot_take_video_2', return_value={'video': 'video2.mp4'}):
-                                    
-                                    result = await orchestrator.process_call_completion('session-123')
-                                    
-                                    # Should still be successful overall
-                                    assert result['status'] == 'success'
-                                    
-                                    # But profile_aggregation task should show error
-                                    profile_task = result['tasks']['profile_aggregation']
-                                    assert profile_task['status'] == 'error'
-                                    assert 'Profile error' in profile_task['error']
+                            
+                            result = await orchestrator.process_call_completion('session-123')
+                            
+                            # Should still be successful overall
+                            assert result['status'] == 'success'
+                            
+                            # But profile_aggregation task should show error
+                            profile_task = result['tasks']['profile_aggregation']
+                            assert profile_task['status'] == 'error'
+                            assert 'Profile error' in profile_task['error']
     
     @pytest.mark.asyncio
     async def test_orchestration_complete_failure(self, mock_supabase):
@@ -327,45 +320,6 @@ class TestTaskMethods:
             assert result == {'result': 'ok'}
             orchestrator.voice_cloning_service.process_voice_recording.assert_called_once_with('session-123')
     
-    def test_generate_hot_take_video_1(self, mock_supabase):
-        """Test _generate_hot_take_video_1 calls HotTakeVideoGenerationService."""
-        orchestrator = PostCallOrchestrator(
-            supabase_client=mock_supabase,
-            anthropic_api_key="test-key",
-            hedra_api_key="hedra-key",
-            cartesia_api_key="cartesia-key",
-            google_api_key="google-key"
-        )
-        
-        with patch.object(orchestrator.hot_take_video_service, 'generate_hot_take_video', return_value={'result': 'ok'}):
-            result = orchestrator._generate_hot_take_video_1('session-123')
-            
-            assert result == {'result': 'ok'}
-            orchestrator.hot_take_video_service.generate_hot_take_video.assert_called_once_with(
-                session_id='session-123',
-                hot_take_number=1
-            )
-    
-    def test_generate_hot_take_video_2(self, mock_supabase):
-        """Test _generate_hot_take_video_2 calls HotTakeVideoGenerationService."""
-        orchestrator = PostCallOrchestrator(
-            supabase_client=mock_supabase,
-            anthropic_api_key="test-key",
-            hedra_api_key="hedra-key",
-            cartesia_api_key="cartesia-key",
-            google_api_key="google-key"
-        )
-        
-        with patch.object(orchestrator.hot_take_video_service, 'generate_hot_take_video', return_value={'result': 'ok'}):
-            result = orchestrator._generate_hot_take_video_2('session-123')
-            
-            assert result == {'result': 'ok'}
-            orchestrator.hot_take_video_service.generate_hot_take_video.assert_called_once_with(
-                session_id='session-123',
-                hot_take_number=2
-            )
-
-
 class TestGetPictureAndUserFromSession:
     """Test _get_picture_and_user_from_session method."""
     

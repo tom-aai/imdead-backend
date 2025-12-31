@@ -67,7 +67,6 @@ class TestProcessTranscript:
                 'personality': 'Analytical',
                 'expertise_description': 'AI Expert',
                 'hot_take_1': 'AI will change everything',
-                'hot_take_2': 'We need better safety',
                 'social_post_draft': 'Great AI discussion...'
             }
             
@@ -307,7 +306,6 @@ class TestUploadToSupabase:
         expected_record['id'] = 'analysis-123'
         expected_record['hedra_avatar_id'] = None
         expected_record['hot_take_video_1'] = None
-        expected_record['hot_take_video_2'] = None
         
         mock_supabase.table.return_value.upsert.return_value.execute.return_value.data = [expected_record]
         
@@ -325,7 +323,6 @@ class TestUploadToSupabase:
         upload_data = mock_supabase.table.return_value.upsert.call_args.args[0]
         assert upload_data['hedra_avatar_id'] is None
         assert upload_data['hot_take_video_1'] is None
-        assert upload_data['hot_take_video_2'] is None
     
     def test_upload_failure(self, mock_supabase, sample_analysis_data):
         """Test error handling when upload fails."""
@@ -349,8 +346,8 @@ class TestUploadToSupabase:
         expected_fields = [
             'session_id', 'user_id', 'user_firstname', 'user_lastname', 'created_at',
             'main_topic', 'conversation_narrative', 'myers_briggs_code', 'personality',
-            'expertise_description', 'hot_take_1', 'hot_take_2', 'social_post_draft',
-            'hedra_avatar_id', 'hot_take_video_1', 'hot_take_video_2'
+            'expertise_description', 'hot_take_1', 'social_post_draft',
+            'hedra_avatar_id', 'hot_take_video_1'
         ]
         
         for field in expected_fields:

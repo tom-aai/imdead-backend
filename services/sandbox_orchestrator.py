@@ -97,18 +97,11 @@ def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
         if not task_name or task_name == "voice_cloning":
             logger.debug("Voice cloning cleanup - no database records to delete")
         
-        # Hot take video cleanup - clear video references in interview_call_analysis
-        if not task_name or task_name in ["hot_take_video_1", "hot_take_video_2"]:
-            update_data = {}
-            if not task_name or task_name == "hot_take_video_1":
-                update_data["hot_take_video_1"] = None
-            if not task_name or task_name == "hot_take_video_2":
-                update_data["hot_take_video_2"] = None
-            
-            if update_data:
-                response = supabase.table("interview_call_analysis").update(update_data).eq("session_id", session_id).execute()
-                if response.data:
-                    logger.debug(f"Cleared hot take video references from interview_call_analysis")
+        # Hot take video cleanup - clear video reference in interview_call_analysis
+        if not task_name or task_name == "hot_take_video":
+            response = supabase.table("interview_call_analysis").update({"hot_take_video_1": None}).eq("session_id", session_id).execute()
+            if response.data:
+                logger.debug(f"Cleared hot take video reference from interview_call_analysis")
         
         logger.debug("Cleanup complete")
         
@@ -204,10 +197,10 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
                 "voice_cloning": result
             }
         }
-    elif task_name == "hot_take_video_1":
+    elif task_name == "hot_take_video":
         result = await orchestrator._run_with_retry(
-            task_name="hot_take_video_1",
-            task_func=orchestrator._generate_hot_take_video_1,
+            task_name="hot_take_video",
+            task_func=orchestrator._generate_hot_take_video,
             session_id=session_id,
             max_retries=3
         )
@@ -215,21 +208,7 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
             "session_id": session_id,
             "status": "success",
             "tasks": {
-                "hot_take_video_1": result
-            }
-        }
-    elif task_name == "hot_take_video_2":
-        result = await orchestrator._run_with_retry(
-            task_name="hot_take_video_2",
-            task_func=orchestrator._generate_hot_take_video_2,
-            session_id=session_id,
-            max_retries=3
-        )
-        return {
-            "session_id": session_id,
-            "status": "success",
-            "tasks": {
-                "hot_take_video_2": result
+                "hot_take_video": result
             }
         }
     else:
@@ -240,8 +219,7 @@ async def run_single_task(orchestrator: PostCallOrchestrator, session_id: str, t
         logger.info("  - image_cartoonization")
         logger.info("  - hedra_avatar_generation")
         logger.info("  - voice_cloning")
-        logger.info("  - hot_take_video_1")
-        logger.info("  - hot_take_video_2")
+        logger.info("  - hot_take_video")
         sys.exit(1)
 
 
@@ -352,7 +330,7 @@ def print_results(results: dict):
                 task_summary["recording_id"] = result.get("recording_id")
                 task_summary["processed_file_path"] = result.get("processed_file_path")
                 
-            elif task_name == "hot_take_video_1" or task_name == "hot_take_video_2":
+            elif task_name == "hot_take_video":
                 task_summary["storage_path"] = result.get("storage_path")
                 task_summary["hot_take_text_preview"] = result.get("hot_take_text", "")[:100] + "..." if result.get("hot_take_text") else None
                 
@@ -394,11 +372,8 @@ Examples:
   # Run only voice cloning
   python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task voice_cloning
   
-  # Run only hot take video #1 generation
-  python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task hot_take_video_1
-  
-  # Run only hot take video #2 generation
-  python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task hot_take_video_2
+  # Run only hot take video generation
+  python sandbox_orchestrator.py --session-id RM_7Vn7ZtZWQxZX --task hot_take_video
   
   # Run direct avatar generation (e.g., user uploads from profile)
   python sandbox_orchestrator.py --user-id abc123 --picture-id profile-pic.jpg --session-id RM_7Vn7ZtZWQxZX

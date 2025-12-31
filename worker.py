@@ -95,13 +95,8 @@ class JobWorker:
             # Route based on job_type
             if job_type == 'hot_take':
                 # Hot take video generation
-                hot_take_number = job_data.get('hot_take_number')
-                if hot_take_number not in [1, 2]:
-                    raise ValueError(f"Invalid hot_take_number: {hot_take_number}")
-                
                 result = self.hot_take_service.generate_hot_take_video(
-                    session_id=session_id,
-                    hot_take_number=hot_take_number
+                    session_id=session_id
                 )
             else:
                 # Default: post-call orchestration

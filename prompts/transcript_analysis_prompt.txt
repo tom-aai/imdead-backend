@@ -49,12 +49,12 @@ Review the conversation transcript and metadata provided below, and extract the 
 
 6. **Main Topic**: Identify the primary topic or subject that the user discussed in the conversation. This should be a concise phrase capturing the core theme. This will be used for categorization and discovery. It should be five words or less.
 
-7. **Hot Takes**: Extract TWO compelling statements from the transcript that represent the user's strongest or most interesting viewpoints. These "hot takes" should:
+7. **Hot Take**: Extract ONE compelling statement from the transcript that represents the user's strongest or most interesting viewpoint. This "hot take" should:
    - Use the same voice, tone, and word choice as the user
    - Be grammatically perfect and well-articulated (clean up any verbal stumbles or filler words)
-   - Be suitable for use in a short avatar video (typically 1-2 sentences each)
+   - Be suitable for use in a short avatar video (typically 1-2 sentences)
    - Capture the user's authentic perspective and personality
-   - These will be used to create promotional avatar video clips
+   - This will be used to create a promotional avatar video clip
 
 8. **Social Post Draft**: Write engaging social media post copy (approximately 2 sentences) that will accompany the hot take avatar videos and promote the avatar agent. Structure it as:
    - First sentence: A thesis statement that introduces the post content
@@ -77,8 +77,7 @@ Return your analysis in the following JSON structure:
   "myers_briggs_code": "string - 4-letter Myers-Briggs personality type code",
   "personality": "string - detailed personality description",
   "expertise_description": "string - succinct 2-4 sentence description of expertise",
-  "hot_take_1": "string - first compelling statement in user's voice",
-  "hot_take_2": "string - second compelling statement in user's voice",
+  "hot_take_1": "string - compelling statement in user's voice",
   "social_post_draft": "string - 2-sentence social post with thesis and CTA"
 }
 ```
@@ -109,8 +108,8 @@ Return your analysis in the following JSON structure:
 **Secondary Elements:**
 - Ensure all metadata fields are accurately copied from the provided metadata
 - For the main_topic, be specific but concise
-- For hot_takes, maintain the user's authentic voice while ensuring grammatical perfection
-- Hot takes should be punchy, memorable, and suitable for video format (avoid overly long statements)
+- For hot_take_1, maintain the user's authentic voice while ensuring grammatical perfection
+- The hot take should be punchy, memorable, and suitable for video format (avoid overly long statements)
 - The social_post_draft should be engaging, concise, and follow the thesis + CTA structure
 
 **General Requirements:**

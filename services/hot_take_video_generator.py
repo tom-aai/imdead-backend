@@ -77,7 +77,6 @@ class HotTakeVideoGenerationService:
         text_prompt: str = "professional interview conversation",
         aspect_ratio: str = "9:16",
         resolution: str = "720p",
-        hot_take_number: int = 1,
         output_dir: str = None,
         add_captions: bool = True
     ) -> dict:
@@ -98,7 +97,6 @@ class HotTakeVideoGenerationService:
             text_prompt: Description for the video generation
             aspect_ratio: Video aspect ratio ("16:9", "9:16", "1:1")
             resolution: Video resolution ("540p", "720p")
-            hot_take_number: Which hot take to use (1 or 2)
             output_dir: Directory to save outputs (defaults to current working directory)
             add_captions: Whether to add captions to the video (default: True)
             
@@ -115,21 +113,18 @@ class HotTakeVideoGenerationService:
         if not self.supabase:
             raise Exception("Supabase client not initialized")
         
-        if hot_take_number not in [1, 2]:
-            raise ValueError("hot_take_number must be 1 or 2")
-        
-        logger.info(f"Starting hot take #{hot_take_number} video generation for session {session_id}")
+        logger.info(f"Starting hot take video generation for session {session_id}")
         
         # Step 1: Get hot_take and hedra_avatar_id from interview_call_analysis
-        hot_take_text, hedra_avatar_id = self._get_hot_take_data(session_id, hot_take_number)
+        hot_take_text, hedra_avatar_id = self._get_hot_take_data(session_id)
         
         if not hot_take_text:
-            raise ValueError(f"No hot_take_{hot_take_number} found for session {session_id}")
+            raise ValueError(f"No hot_take_1 found for session {session_id}")
         
         if not hedra_avatar_id:
             raise ValueError(f"No hedra_avatar_id found for session {session_id}")
         
-        logger.debug(f"Hot take #{hot_take_number} text preview: {hot_take_text[:100]}...")
+        logger.debug(f"Hot take text preview: {hot_take_text[:100]}...")
         logger.debug(f"Using Hedra avatar ID: {hedra_avatar_id}")
         
         # Step 2: Get user_id from interview_calls
@@ -156,27 +151,25 @@ class HotTakeVideoGenerationService:
         temp_audio_path, word_timestamps = self._generate_audio_with_cartesia(
             hot_take_text,
             voice_id,
-            session_id,
-            hot_take_number
+            session_id
         )
         
-        logger.info(f"Audio generated for hot take #{hot_take_number}")
+        logger.info(f"Audio generated for hot take")
         
         # Step 5: Generate video using Hedra
         temp_video_path = self._generate_video_with_hedra(
             hedra_avatar_id=hedra_avatar_id,
             audio_path=temp_audio_path,
             session_id=session_id,
-            hot_take_number=hot_take_number,
             text_prompt=text_prompt,
             aspect_ratio=aspect_ratio,
             resolution=resolution
         )
         
-        logger.info(f"Video generated successfully for hot take #{hot_take_number}")
+        logger.info(f"Video generated successfully for hot take")
         
         # Step 6: Save all outputs to the specified directory
-        base_filename = f"hot_take_{hot_take_number}_{session_id}"
+        base_filename = f"hot_take_{session_id}"
         
         # Save audio (move from current directory to output_dir if needed)
         audio_filename = f"{base_filename}_audio.wav"
@@ -197,7 +190,7 @@ class HotTakeVideoGenerationService:
         
         # Step 7: Optionally add captions using CaptionGenerator
         if add_captions:
-            logger.info(f"Adding captions to hot take #{hot_take_number} video")
+            logger.info(f"Adding captions to hot take video")
             
             try:
                 # Use CaptionGenerator to add captions with word-by-word highlighting
@@ -225,8 +218,8 @@ class HotTakeVideoGenerationService:
                 except Exception as e:
                     logger.warning(f"Failed to clean up temp video: {e}")
                 
-                logger.info(f"Captions added successfully to hot take #{hot_take_number}")
-                message = f"Hot take #{hot_take_number} video generated with captions"
+                logger.info(f"Captions added successfully to hot take video")
+                message = f"Hot take video generated with captions"
                 
             except Exception as e:
                 logger.error(f"Failed to add captions: {e}")
@@ -242,7 +235,7 @@ class HotTakeVideoGenerationService:
                     except Exception as e:
                         logger.warning(f"Failed to clean up temp video: {e}")
                 
-                message = f"Hot take #{hot_take_number} video generated (captions failed, video without captions)"
+                message = f"Hot take video generated (captions failed, video without captions)"
         else:
             # Save video without captions
             video_path = os.path.join(output_dir, f"{base_filename}.mp4")
@@ -255,34 +248,32 @@ class HotTakeVideoGenerationService:
                 except Exception as e:
                     logger.warning(f"Failed to clean up temp video: {e}")
             
-            message = f"Hot take #{hot_take_number} video generated (without captions)"
+            message = f"Hot take video generated (without captions)"
         
         logger.debug(f"Saved video to {video_path}")
         
         # Step 8: Upload video to Supabase storage and update database
         storage_path = None
         try:
-            logger.info(f"Uploading hot take #{hot_take_number} video to Supabase")
+            logger.info(f"Uploading hot take video to Supabase")
             
             # Upload the final video to Supabase storage
             storage_path = self._upload_video_to_storage(
                 video_path=video_path,
                 user_id=user_id,
-                session_id=session_id,
-                hot_take_number=hot_take_number
+                session_id=session_id
             )
             
             # Update the database with the storage path
             self._update_video_filename_in_db(
                 session_id=session_id,
-                storage_path=storage_path,
-                hot_take_number=hot_take_number
+                storage_path=storage_path
             )
             
             logger.info(f"Video uploaded to storage and database updated: {storage_path}")
             
             # Step 9: Clean up local files after successful upload
-            logger.debug(f"Cleaning up local files for hot take #{hot_take_number}")
+            logger.debug(f"Cleaning up local files for hot take")
             files_to_cleanup = [video_path, audio_path, timestamps_path]
             for file_path_to_delete in files_to_cleanup:
                 try:
@@ -305,18 +296,16 @@ class HotTakeVideoGenerationService:
             "audio_path": audio_path,
             "timestamps_path": timestamps_path,
             "hot_take_text": hot_take_text,
-            "hot_take_number": hot_take_number,
             "captions_added": add_captions,
             "storage_path": storage_path
         }
     
-    def _get_hot_take_data(self, session_id: str, hot_take_number: int = 1) -> tuple[str, str]:
+    def _get_hot_take_data(self, session_id: str) -> tuple[str, str]:
         """
         Get hot_take and hedra_avatar_id from interview_call_analysis table.
         
         Args:
             session_id: The LiveKit session ID
-            hot_take_number: Which hot take to retrieve (1 or 2)
             
         Returns:
             tuple[str, str]: (hot_take_text, hedra_avatar_id)
@@ -326,7 +315,7 @@ class HotTakeVideoGenerationService:
         """
         try:
             response = self.supabase.table("interview_call_analysis")\
-                .select("hot_take_1, hot_take_2, hedra_avatar_id")\
+                .select("hot_take_1, hedra_avatar_id")\
                 .eq("session_id", session_id)\
                 .limit(1)\
                 .execute()
@@ -335,7 +324,7 @@ class HotTakeVideoGenerationService:
                 raise ValueError(f"No call analysis found for session_id: {session_id}")
             
             analysis_data = response.data[0]
-            hot_take_text = analysis_data.get(f'hot_take_{hot_take_number}')
+            hot_take_text = analysis_data.get('hot_take_1')
             hedra_avatar_id = analysis_data.get('hedra_avatar_id')
             
             return hot_take_text, hedra_avatar_id
@@ -412,8 +401,7 @@ class HotTakeVideoGenerationService:
         self,
         text: str,
         voice_id: str,
-        session_id: str,
-        hot_take_number: int = 1
+        session_id: str
     ) -> Tuple[str, List[Dict]]:
         """
         Generate audio from text using Cartesia with word timestamps.
@@ -422,7 +410,6 @@ class HotTakeVideoGenerationService:
             text: The text to convert to speech
             voice_id: The Cartesia voice ID to use
             session_id: Session ID for naming the output file
-            hot_take_number: Which hot take this is for
             
         Returns:
             Tuple[str, List[Dict]]: (audio_file_path, word_timestamps)
@@ -537,7 +524,7 @@ class HotTakeVideoGenerationService:
             logger.debug(f"Processed {event_count} SSE events, received {len(audio_chunks)} audio chunks ({len(raw_audio)} bytes) and {len(word_timestamps)} word timestamps")
             
             # Convert raw PCM to WAV file
-            output_filename = f"hot_take_{hot_take_number}_audio_{session_id}.wav"
+            output_filename = f"hot_take_audio_{session_id}.wav"
             output_path = os.path.join(os.getcwd(), output_filename)
             
             # Write as WAV file with proper headers
@@ -560,7 +547,6 @@ class HotTakeVideoGenerationService:
         hedra_avatar_id: str,
         audio_path: str,
         session_id: str,
-        hot_take_number: int,
         text_prompt: str,
         aspect_ratio: str,
         resolution: str
@@ -572,7 +558,6 @@ class HotTakeVideoGenerationService:
             hedra_avatar_id: The Hedra avatar asset ID
             audio_path: Path to the audio file
             session_id: Session ID for naming the output file
-            hot_take_number: Which hot take this is for
             text_prompt: Description for the video generation
             aspect_ratio: Video aspect ratio
             resolution: Video resolution
@@ -584,7 +569,7 @@ class HotTakeVideoGenerationService:
             Exception: If video generation fails
         """
         try:
-            logger.info(f"Generating video with Hedra for hot take #{hot_take_number}")
+            logger.info(f"Generating video with Hedra for hot take")
             
             # Initialize Hedra session
             session = HedraSession(api_key=self.hedra_api_key)
@@ -612,7 +597,7 @@ class HotTakeVideoGenerationService:
             # Download to a temporary file first
             temp_download_path = os.path.join(
                 tempfile.gettempdir(),
-                f"hot_take_{hot_take_number}_video_{session_id}_raw.mp4"
+                f"hot_take_video_{session_id}_raw.mp4"
             )
             
             self._download_video(status_data["download_url"], temp_download_path)
@@ -620,7 +605,7 @@ class HotTakeVideoGenerationService:
             # Step 5: Crop video to 9:16 aspect ratio for social media
             output_filename = os.path.join(
                 tempfile.gettempdir(),
-                f"hot_take_{hot_take_number}_video_{session_id}.mp4"
+                f"hot_take_video_{session_id}.mp4"
             )
             
             self._crop_video_to_9_16(temp_download_path, output_filename)
@@ -745,8 +730,7 @@ class HotTakeVideoGenerationService:
         self,
         video_path: str,
         user_id: str,
-        session_id: str,
-        hot_take_number: int
+        session_id: str
     ) -> str:
         """
         Upload video to Supabase storage.
@@ -755,7 +739,6 @@ class HotTakeVideoGenerationService:
             video_path: Local path to the video file
             user_id: The user's ID
             session_id: The session ID
-            hot_take_number: Which hot take this is (1 or 2)
             
         Returns:
             str: The storage path of the uploaded video
@@ -764,7 +747,7 @@ class HotTakeVideoGenerationService:
             Exception: If upload fails
         """
         try:
-            storage_path = f"{user_id}/hot_take_{hot_take_number}_{session_id}.mp4"
+            storage_path = f"{user_id}/hot_take_{session_id}.mp4"
             
             logger.debug(f"Uploading video to Supabase storage: {storage_path}")
             
@@ -793,8 +776,7 @@ class HotTakeVideoGenerationService:
     def _update_video_filename_in_db(
         self,
         session_id: str,
-        storage_path: str,
-        hot_take_number: int
+        storage_path: str
     ) -> None:
         """
         Update interview_call_analysis table with the video filename.
@@ -802,19 +784,16 @@ class HotTakeVideoGenerationService:
         Args:
             session_id: The LiveKit session ID
             storage_path: The storage path of the video
-            hot_take_number: Which hot take this is (1 or 2)
             
         Raises:
             Exception: If database update fails
         """
         try:
-            column_name = f"hot_take_video_{hot_take_number}"
+            logger.debug(f"Updating database column hot_take_video_1 with: {storage_path}")
             
-            logger.debug(f"Updating database column {column_name} with: {storage_path}")
-            
-            # Update the specific column in interview_call_analysis
+            # Update the hot_take_video_1 column in interview_call_analysis
             response = self.supabase.table("interview_call_analysis")\
-                .update({column_name: storage_path})\
+                .update({"hot_take_video_1": storage_path})\
                 .eq("session_id", session_id)\
                 .execute()
             

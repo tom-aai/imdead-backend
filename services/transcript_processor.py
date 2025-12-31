@@ -215,12 +215,10 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 			"personality": analysis_data.get("personality"),
 			"expertise_description": analysis_data.get("expertise_description"),
 			"hot_take_1": analysis_data.get("hot_take_1"),
-			"hot_take_2": analysis_data.get("hot_take_2"),
 			"social_post_draft": analysis_data.get("social_post_draft"),
 			# Nullable fields (will be populated by future tasks)
 			"hedra_avatar_id": None,
-			"hot_take_video_1": None,
-			"hot_take_video_2": None
+			"hot_take_video_1": None
 		}
 		
 		# Upsert into Supabase (allows re-processing of the same session)

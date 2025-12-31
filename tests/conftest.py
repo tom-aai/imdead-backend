@@ -71,7 +71,6 @@ def sample_analysis_data():
         'personality': 'Analytical and strategic thinker',
         'expertise_description': 'Expert in machine learning and AI systems',
         'hot_take_1': 'AI will revolutionize healthcare within 5 years',
-        'hot_take_2': 'Current AI safety measures are insufficient',
         'social_post_draft': 'Just had a great conversation about AI...'
     }
 

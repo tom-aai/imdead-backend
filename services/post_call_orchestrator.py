@@ -45,7 +45,7 @@ class PostCallOrchestrator:
         Orchestrate all post-call processing tasks for a completed call.
         
         Tasks:
-        - Transcript processing and analysis (populates hot_take_1, hot_take_2 text)
+        - Transcript processing and analysis (populates hot_take_1 text)
         - User profile aggregation
         - Image cartoonization (transform to editorial illustration)
         - Hedra avatar generation from cartoonized image
@@ -114,9 +114,9 @@ class PostCallOrchestrator:
             )
             results["tasks"]["voice_cloning"] = voice_cloning_result
             
-            # Note: Hot take video generation (previously Tasks 6 & 7) is now user-triggered
-            # from the dashboard. The hot_take_1 and hot_take_2 text is populated by
-            # transcript_processing and can be edited by users before generating videos.
+            # Note: Hot take video generation is now user-triggered
+            # from the dashboard. The hot_take_1 text is populated by
+            # transcript_processing and can be edited by users before generating the video.
             
             logger.info(f"Post-call orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
             

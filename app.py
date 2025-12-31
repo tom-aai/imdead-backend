@@ -426,14 +426,10 @@ def generate_hot_take_video_endpoint():
 		# Get request data
 		data = request.get_json()
 		session_id = data.get("session_id")
-		hot_take_number = data.get("hot_take_number")
 		hot_take_text = data.get("hot_take_text")
 		
 		if not session_id:
 			return jsonify({"error": "session_id is required"}), 400
-		
-		if hot_take_number not in [1, 2]:
-			return jsonify({"error": "hot_take_number must be 1 or 2"}), 400
 		
 		if not hot_take_text or not hot_take_text.strip():
 			return jsonify({"error": "hot_take_text is required"}), 400
@@ -453,19 +449,18 @@ def generate_hot_take_video_endpoint():
 			return jsonify({"error": "Unauthorized - session belongs to another user"}), 403
 		
 		# Update the hot_take text in interview_call_analysis (in case it was edited)
-		hot_take_column = f"hot_take_{hot_take_number}"
 		supabase.table("interview_call_analysis")\
-			.update({hot_take_column: hot_take_text.strip()})\
+			.update({"hot_take_1": hot_take_text.strip()})\
 			.eq("session_id", session_id)\
 			.execute()
 		
-		logger.info(f"Updated {hot_take_column} for session {session_id}")
+		logger.info(f"Updated hot_take_1 for session {session_id}")
 		
 		# Enqueue hot take video generation job in post_call_jobs with job_type='hot_take'
 		job_record = {
 			"session_id": session_id,
 			"job_type": "hot_take",
-			"job_data": {"hot_take_number": hot_take_number, "user_id": user_id},
+			"job_data": {"user_id": user_id},
 			"status": "pending",
 			"attempts": 0,
 			"max_attempts": 3
@@ -478,14 +473,13 @@ def generate_hot_take_video_endpoint():
 		
 		job_id = job_response.data[0].get('id')
 		
-		logger.info(f"Hot take video job enqueued for session {session_id}, hot_take_{hot_take_number} (job_id: {job_id})")
+		logger.info(f"Hot take video job enqueued for session {session_id} (job_id: {job_id})")
 		
 		return jsonify({
 			"status": "queued",
-			"message": f"Hot take video {hot_take_number} generation job enqueued",
+			"message": "Hot take video generation job enqueued",
 			"job_id": job_id,
-			"session_id": session_id,
-			"hot_take_number": hot_take_number
+			"session_id": session_id
 		}), 202
 		
 	except Exception as e:
@@ -540,7 +534,6 @@ def get_hot_take_job_status(job_id: str):
 			"job_id": job['id'],
 			"session_id": job['session_id'],
 			"job_type": job.get('job_type'),
-			"hot_take_number": job_data.get('hot_take_number'),
 			"status": job['status'],
 			"attempts": job['attempts'],
 			"max_attempts": job['max_attempts'],
