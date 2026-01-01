@@ -549,5 +549,101 @@ def get_hot_take_job_status(job_id: str):
 		return jsonify({"error": str(e)}), 500
 
 
+@app.route("/update-session-avatar", methods=["POST"])
+@require_api_key
+def update_session_avatar_endpoint():
+	"""
+	Update the avatar for an existing session.
+	
+	This endpoint is called from the frontend when a user wants to change their
+	avatar image for a session. It:
+	1. Creates a new record in user_avatar_images table
+	2. Enqueues an avatar_update job for async processing (cartoonize + Hedra)
+	
+	Required fields:
+	- user_id: The user's ID
+	- session_id: The session to update
+	- picture_id: The picture ID from Supabase storage (already uploaded by frontend)
+	
+	Returns:
+	- job_id: UUID of the enqueued job for status polling
+	"""
+	try:
+		# Get request data
+		data = request.get_json()
+		user_id = data.get("user_id")
+		session_id = data.get("session_id")
+		picture_id = data.get("picture_id")
+		
+		if not user_id:
+			return jsonify({"error": "user_id is required"}), 400
+		
+		if not session_id:
+			return jsonify({"error": "session_id is required"}), 400
+		
+		if not picture_id:
+			return jsonify({"error": "picture_id is required"}), 400
+		
+		# Create record in user_avatar_images table
+		# The picture_id from frontend is in format: {user_id}/{uuid}.png
+		# We need to extract just the filename part for consistency
+		avatar_record = {
+			"user_id": user_id,
+			"picture_id": picture_id,
+			"session_id": session_id,
+			"picture_source": "avatar_update"
+		}
+		
+		response = supabase.table("user_avatar_images").insert(avatar_record).execute()
+		
+		if not response.data:
+			raise Exception("Failed to create record in user_avatar_images")
+		
+		record_id = response.data[0].get('id')
+		logger.info(f"Created user_avatar_images record (id: {record_id}) for avatar update")
+		
+		# Update interview_calls.picture_id to point to the new picture
+		supabase.table("interview_calls")\
+			.update({"picture_id": picture_id})\
+			.eq("session_id", session_id)\
+			.execute()
+		
+		logger.info(f"Updated interview_calls.picture_id for session {session_id}")
+		
+		# Enqueue avatar_update job in post_call_jobs
+		job_record = {
+			"session_id": session_id,
+			"job_type": "avatar_update",
+			"job_data": {
+				"user_id": user_id,
+				"picture_id": picture_id
+			},
+			"status": "pending",
+			"attempts": 0,
+			"max_attempts": 3
+		}
+		
+		job_response = supabase.table("post_call_jobs").insert(job_record).execute()
+		
+		if not job_response.data:
+			raise Exception("Failed to enqueue avatar update job")
+		
+		job_id = job_response.data[0].get('id')
+		
+		logger.info(f"Avatar update job enqueued for session {session_id} (job_id: {job_id})")
+		
+		return jsonify({
+			"status": "queued",
+			"message": "Avatar update job enqueued",
+			"job_id": job_id,
+			"session_id": session_id,
+			"record_id": record_id
+		}), 202
+		
+	except Exception as e:
+		logger.error(f"Error enqueuing avatar update: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
 	app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5001)), debug=True)

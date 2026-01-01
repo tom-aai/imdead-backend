@@ -45,13 +45,11 @@ class PostCallOrchestrator:
         Orchestrate all post-call processing tasks for a completed call.
         
         Tasks:
-        - Transcript processing and analysis (populates hot_take_1 text)
+        - Transcript processing and analysis
         - User profile aggregation
         - Image cartoonization (transform to editorial illustration)
         - Hedra avatar generation from cartoonized image
         - Voice recording processing for voice cloning
-        
-        Note: Hot take video generation is triggered manually by users from the dashboard.
         
         Args:
             session_id: The LiveKit session ID
@@ -113,10 +111,6 @@ class PostCallOrchestrator:
                 max_retries=3
             )
             results["tasks"]["voice_cloning"] = voice_cloning_result
-            
-            # Note: Hot take video generation is now user-triggered
-            # from the dashboard. The hot_take_1 text is populated by
-            # transcript_processing and can be edited by users before generating the video.
             
             logger.info(f"Post-call orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
             
@@ -346,4 +340,98 @@ class PostCallOrchestrator:
             dict: Voice processing result
         """
         return self.voice_cloning_service.process_voice_recording(session_id)
+    
+    async def process_avatar_update(self, session_id: str, user_id: str, picture_id: str) -> Dict[str, Any]:
+        """
+        Process an avatar update for an existing session.
+        
+        This is called when a user wants to change their avatar image.
+        It runs cartoonization and Hedra avatar generation.
+        
+        Args:
+            session_id: The LiveKit session ID
+            user_id: The user's ID
+            picture_id: The new picture ID (full path in storage: {user_id}/{uuid}.png)
+            
+        Returns:
+            dict: Processing results with status and data
+        """
+        logger.info(f"Starting avatar update for session {session_id}, picture {picture_id}")
+        
+        results = {
+            "session_id": session_id,
+            "status": "success",
+            "tasks": {}
+        }
+        
+        try:
+            # Task 1: Cartoonize the new image
+            cartoonize_result = await self._run_with_retry(
+                task_name="image_cartoonization",
+                task_func=self._cartoonize_avatar_update,
+                user_id=user_id,
+                picture_id=picture_id,
+                session_id=session_id,
+                max_retries=3
+            )
+            results["tasks"]["image_cartoonization"] = cartoonize_result
+            
+            if cartoonize_result.get("status") != "success":
+                raise Exception(f"Cartoonization failed: {cartoonize_result.get('error')}")
+            
+            # Task 2: Generate Hedra avatar from cartoonized image
+            hedra_result = await self._run_with_retry(
+                task_name="hedra_avatar_generation",
+                task_func=self._generate_hedra_avatar_update,
+                user_id=user_id,
+                picture_id=picture_id,
+                session_id=session_id,
+                max_retries=3
+            )
+            results["tasks"]["hedra_avatar_generation"] = hedra_result
+            
+            logger.info(f"Avatar update completed for session {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Avatar update failed for session {session_id}: {e}")
+            results["status"] = "error"
+            results["error"] = str(e)
+        
+        return results
+    
+    def _cartoonize_avatar_update(self, user_id: str, picture_id: str, session_id: str) -> dict:
+        """
+        Cartoonize image for an avatar update.
+        
+        Args:
+            user_id: The user's ID
+            picture_id: The picture ID (full path: {user_id}/{uuid}.png)
+            session_id: The session ID
+            
+        Returns:
+            dict: Cartoonization result
+        """
+        return self.cartoon_generator.cartoonize_image(
+            user_id=user_id,
+            picture_id=picture_id,
+            session_id=session_id
+        )
+    
+    def _generate_hedra_avatar_update(self, user_id: str, picture_id: str, session_id: str) -> dict:
+        """
+        Generate Hedra avatar for an avatar update.
+        
+        Args:
+            user_id: The user's ID
+            picture_id: The original picture ID
+            session_id: The session ID
+            
+        Returns:
+            dict: Hedra avatar generation result
+        """
+        return self.hedra_avatar_generator.generate_avatar(
+            user_id=user_id,
+            picture_id=picture_id,
+            session_id=session_id
+        )
 
