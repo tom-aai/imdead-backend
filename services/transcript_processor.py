@@ -78,8 +78,8 @@ class TranscriptProcessor:
 		logger.debug(f"Analyzing transcript with LLM (length: {len(transcript)} chars)")
 		analysis = self._process_with_llm(metadata, transcript)
 		
-		# Upload to interview_call_analysis table
-		uploaded_record = self._upload_to_supabase(analysis)
+		# Upload to interview_call_analysis table 
+		uploaded_record = self._upload_to_supabase(analysis, call_data)
 		
 		logger.info(f"Transcript processing completed for session {session_id}")
 		
@@ -144,6 +144,40 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 		
 		return "\n".join(transcript_lines)
 	
+	def _filter_conversation_items(self, conversation: dict) -> dict:
+		"""
+		Filter conversation items to only include essential fields.
+		
+		Keeps: role, content, interrupted, transcript_confidence (if available)
+		Removes: id, type, extra, metrics, etc.
+		
+		Args:
+			conversation: The raw conversation JSONB data
+			
+		Returns:
+			dict: Filtered conversation with only essential fields
+		"""
+		filtered_items = []
+		for item in conversation.get("items", []):
+			# Skip non-message items (like agent_handoff)
+			if item.get("type") != "message":
+				continue
+			
+			filtered_item = {
+				"role": item.get("role"),
+				"content": item.get("content"),
+			}
+			
+			# Include optional fields if present
+			if "interrupted" in item:
+				filtered_item["interrupted"] = item["interrupted"]
+			if "transcript_confidence" in item:
+				filtered_item["transcript_confidence"] = item["transcript_confidence"]
+			
+			filtered_items.append(filtered_item)
+		
+		return {"items": filtered_items}
+	
 	def _process_with_llm(self, metadata: str, transcript: str) -> dict:
 		"""
 		Process transcript with Claude using the transcript analysis prompt.
@@ -191,17 +225,22 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 		
 		return json.loads(json_text)
 	
-	def _upload_to_supabase(self, analysis_data: dict) -> dict:
+	def _upload_to_supabase(self, analysis_data: dict, call_data: dict) -> dict:
 		"""
 		Upload analysis data to interview_call_analysis table.
-		Includes all fields from transcript analysis.
+		Includes all fields from transcript analysis plus filtered conversation.
 		
 		Args:
 			analysis_data: Dict containing the full analysis from Claude
+			call_data: Dict containing the original call data including conversation
 			
 		Returns:
 			dict: The inserted record from Supabase
 		"""
+		# Filter conversation to essential fields and serialize as JSON string
+		conversation = call_data.get("conversation", {})
+		filtered_conversation = self._filter_conversation_items(conversation)
+		
 		# Prepare data for upload
 		upload_data = {
 			"session_id": analysis_data.get("session_id"),
@@ -210,7 +249,7 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 			"user_lastname": analysis_data.get("user_lastname"),
 			"created_at": analysis_data.get("created_at"),
 			"main_topic": analysis_data.get("main_topic"),
-			"conversation_narrative": analysis_data.get("conversation_narrative"),
+			"conversation_narrative": json.dumps(filtered_conversation),
 			"myers_briggs_code": analysis_data.get("myers_briggs_code"),
 			"personality": analysis_data.get("personality"),
 			"expertise_description": analysis_data.get("expertise_description"),
