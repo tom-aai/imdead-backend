@@ -53,7 +53,7 @@ class TestProcessTranscript:
         
         processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
         
-        # Mock the LLM processing
+        # Mock the LLM processing (no conversation_narrative - it comes from raw data now)
         with patch.object(processor, '_process_with_llm') as mock_llm:
             mock_llm.return_value = {
                 'session_id': sample_call_data['session_id'],
@@ -62,7 +62,6 @@ class TestProcessTranscript:
                 'user_lastname': sample_call_data['user_lastname'],
                 'created_at': sample_call_data['created_at'],
                 'main_topic': 'AI',
-                'conversation_narrative': 'Discussion about AI...',
                 'myers_briggs_code': 'INTJ',
                 'personality': 'Analytical',
                 'expertise_description': 'AI Expert',
@@ -210,6 +209,135 @@ class TestFormatTranscript:
         assert '[ASSISTANT]: List' in result
 
 
+class TestFilterConversationItems:
+    """Test _filter_conversation_items method."""
+    
+    def test_filters_to_essential_fields(self, mock_supabase):
+        """Test that only essential fields are kept."""
+        conversation = {
+            'items': [
+                {
+                    'id': 'item-123',
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': ['Hello!'],
+                    'extra': {},
+                    'metrics': {'llm_node_ttft': 0.5},
+                    'interrupted': False
+                },
+                {
+                    'id': 'item-456',
+                    'type': 'message',
+                    'role': 'user',
+                    'content': ['Hi there!'],
+                    'extra': {},
+                    'metrics': {'end_of_turn_delay': 0.6},
+                    'interrupted': False,
+                    'transcript_confidence': 0.95
+                }
+            ]
+        }
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        result = processor._filter_conversation_items(conversation)
+        
+        assert len(result['items']) == 2
+        
+        # Check first item - should not have id, type, extra, metrics
+        assert 'id' not in result['items'][0]
+        assert 'type' not in result['items'][0]
+        assert 'extra' not in result['items'][0]
+        assert 'metrics' not in result['items'][0]
+        assert result['items'][0]['role'] == 'assistant'
+        assert result['items'][0]['content'] == ['Hello!']
+        assert result['items'][0]['interrupted'] == False
+        
+        # Check second item - should have transcript_confidence
+        assert result['items'][1]['role'] == 'user'
+        assert result['items'][1]['content'] == ['Hi there!']
+        assert result['items'][1]['transcript_confidence'] == 0.95
+    
+    def test_skips_non_message_items(self, mock_supabase):
+        """Test that non-message items like agent_handoff are skipped."""
+        conversation = {
+            'items': [
+                {
+                    'id': 'item-001',
+                    'type': 'agent_handoff',
+                    'new_agent_id': 'interview_agent'
+                },
+                {
+                    'id': 'item-002',
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': ['Hello!']
+                },
+                {
+                    'id': 'item-003',
+                    'type': 'function_call',
+                    'function': 'some_function'
+                }
+            ]
+        }
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        result = processor._filter_conversation_items(conversation)
+        
+        # Only the message item should be included
+        assert len(result['items']) == 1
+        assert result['items'][0]['role'] == 'assistant'
+        assert result['items'][0]['content'] == ['Hello!']
+    
+    def test_handles_empty_conversation(self, mock_supabase):
+        """Test handling of empty conversation."""
+        conversation = {'items': []}
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        result = processor._filter_conversation_items(conversation)
+        
+        assert result == {'items': []}
+    
+    def test_handles_missing_optional_fields(self, mock_supabase):
+        """Test that optional fields are only included when present."""
+        conversation = {
+            'items': [
+                {
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': ['Hello!']
+                    # No interrupted or transcript_confidence
+                }
+            ]
+        }
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        result = processor._filter_conversation_items(conversation)
+        
+        assert len(result['items']) == 1
+        assert 'interrupted' not in result['items'][0]
+        assert 'transcript_confidence' not in result['items'][0]
+        assert result['items'][0]['role'] == 'assistant'
+        assert result['items'][0]['content'] == ['Hello!']
+    
+    def test_preserves_interrupted_flag(self, mock_supabase):
+        """Test that interrupted flag is preserved when present."""
+        conversation = {
+            'items': [
+                {
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': ['I was saying...'],
+                    'interrupted': True
+                }
+            ]
+        }
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        result = processor._filter_conversation_items(conversation)
+        
+        assert result['items'][0]['interrupted'] == True
+
+
 class TestProcessWithLLM:
     """Test _process_with_llm method."""
     
@@ -299,7 +427,7 @@ class TestProcessWithLLM:
 class TestUploadToSupabase:
     """Test _upload_to_supabase method."""
     
-    def test_successful_upload(self, mock_supabase, sample_analysis_data):
+    def test_successful_upload(self, mock_supabase, sample_analysis_data, sample_call_data):
         """Test successful upload to interview_call_analysis table."""
         expected_record = sample_analysis_data.copy()
         expected_record['id'] = 'analysis-123'
@@ -309,7 +437,7 @@ class TestUploadToSupabase:
         mock_supabase.table.return_value.upsert.return_value.execute.return_value.data = [expected_record]
         
         processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
-        result = processor._upload_to_supabase(sample_analysis_data)
+        result = processor._upload_to_supabase(sample_analysis_data, sample_call_data)
         
         assert result['id'] == 'analysis-123'
         assert result['session_id'] == sample_analysis_data['session_id']
@@ -323,21 +451,21 @@ class TestUploadToSupabase:
         assert upload_data['hedra_avatar_id'] is None
         assert upload_data['hot_take_video_1'] is None
     
-    def test_upload_failure(self, mock_supabase, sample_analysis_data):
+    def test_upload_failure(self, mock_supabase, sample_analysis_data, sample_call_data):
         """Test error handling when upload fails."""
         mock_supabase.table.return_value.upsert.return_value.execute.return_value.data = None
         
         processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
         
         with pytest.raises(Exception, match="Failed to upload analysis"):
-            processor._upload_to_supabase(sample_analysis_data)
+            processor._upload_to_supabase(sample_analysis_data, sample_call_data)
     
-    def test_upload_includes_all_fields(self, mock_supabase, sample_analysis_data):
+    def test_upload_includes_all_fields(self, mock_supabase, sample_analysis_data, sample_call_data):
         """Test that all expected fields are included in upload."""
         mock_supabase.table.return_value.upsert.return_value.execute.return_value.data = [{'id': '123'}]
         
         processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
-        processor._upload_to_supabase(sample_analysis_data)
+        processor._upload_to_supabase(sample_analysis_data, sample_call_data)
         
         upload_data = mock_supabase.table.return_value.upsert.call_args.args[0]
         
@@ -351,4 +479,52 @@ class TestUploadToSupabase:
         
         for field in expected_fields:
             assert field in upload_data
+    
+    def test_upload_stores_filtered_conversation_as_json(self, mock_supabase, sample_analysis_data, sample_call_data):
+        """Test that conversation_narrative contains filtered conversation JSON."""
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value.data = [{'id': '123'}]
+        
+        # Add message type to sample_call_data items for filtering
+        call_data_with_types = sample_call_data.copy()
+        call_data_with_types['conversation'] = {
+            'items': [
+                {
+                    'id': 'item-1',
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': [{'text': 'Hello!'}],
+                    'metrics': {'llm_node_ttft': 0.5}
+                },
+                {
+                    'id': 'item-2',
+                    'type': 'message',
+                    'role': 'user',
+                    'content': [{'text': 'Hi!'}],
+                    'transcript_confidence': 0.9
+                }
+            ]
+        }
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        processor._upload_to_supabase(sample_analysis_data, call_data_with_types)
+        
+        upload_data = mock_supabase.table.return_value.upsert.call_args.args[0]
+        
+        # conversation_narrative should be a JSON string
+        import json
+        conversation = json.loads(upload_data['conversation_narrative'])
+        
+        # Should have filtered items
+        assert 'items' in conversation
+        assert len(conversation['items']) == 2
+        
+        # Should not contain metrics, id, type
+        assert 'metrics' not in conversation['items'][0]
+        assert 'id' not in conversation['items'][0]
+        assert 'type' not in conversation['items'][0]
+        
+        # Should contain role and content
+        assert conversation['items'][0]['role'] == 'assistant'
+        assert conversation['items'][1]['role'] == 'user'
+        assert conversation['items'][1]['transcript_confidence'] == 0.9
 

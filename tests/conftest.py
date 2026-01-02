@@ -44,12 +44,17 @@ def sample_call_data():
         'conversation': {
             'items': [
                 {
+                    'type': 'message',
                     'role': 'assistant',
-                    'content': [{'text': 'Hello! How are you today?'}]
+                    'content': [{'text': 'Hello! How are you today?'}],
+                    'interrupted': False
                 },
                 {
+                    'type': 'message',
                     'role': 'user',
-                    'content': [{'text': 'I am doing great, thanks!'}]
+                    'content': [{'text': 'I am doing great, thanks!'}],
+                    'interrupted': False,
+                    'transcript_confidence': 0.92
                 }
             ]
         }
@@ -58,7 +63,7 @@ def sample_call_data():
 
 @pytest.fixture
 def sample_analysis_data():
-    """Sample interview call analysis data."""
+    """Sample interview call analysis data (from LLM, without conversation_narrative)."""
     return {
         'session_id': 'test-session-123',
         'user_id': 'user-456',
@@ -66,7 +71,6 @@ def sample_analysis_data():
         'user_lastname': 'Doe',
         'created_at': '2024-01-15T10:30:00Z',
         'main_topic': 'Artificial Intelligence',
-        'conversation_narrative': 'Discussion about AI trends...',
         'myers_briggs_code': 'INTJ',
         'personality': 'Analytical and strategic thinker',
         'expertise_description': 'Expert in machine learning and AI systems',

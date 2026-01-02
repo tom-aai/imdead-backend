@@ -397,3 +397,130 @@ class TestGetCartoonIdFromSession:
         
         assert cartoon_id is None
 
+
+class TestProcessAvatarUpdate:
+    """Test the process_avatar_update method for avatar updates."""
+    
+    @pytest.mark.asyncio
+    async def test_successful_avatar_update(self, mock_supabase):
+        """Test successful execution of avatar update tasks."""
+        orchestrator = PostCallOrchestrator(
+            supabase_client=mock_supabase,
+            anthropic_api_key="test-key",
+            hedra_api_key="hedra-key",
+            cartesia_api_key="cartesia-key",
+            google_api_key="google-key"
+        )
+        
+        # Mock the task methods
+        with patch.object(orchestrator, '_cartoonize_avatar_update', return_value={'cartoonized_picture_id': 'cartoon.png'}):
+            with patch.object(orchestrator, '_generate_hedra_avatar_update', return_value={'hedra_avatar_id': 'hedra-123'}):
+                result = await orchestrator.process_avatar_update(
+                    session_id='session-123',
+                    user_id='user-456',
+                    picture_id='user-456/pic.png'
+                )
+                
+                assert result['status'] == 'success'
+                assert result['session_id'] == 'session-123'
+                assert len(result['tasks']) == 2
+                assert 'image_cartoonization' in result['tasks']
+                assert 'hedra_avatar_generation' in result['tasks']
+    
+    @pytest.mark.asyncio
+    async def test_avatar_update_cartoonization_failure(self, mock_supabase):
+        """Test avatar update fails when cartoonization fails."""
+        orchestrator = PostCallOrchestrator(
+            supabase_client=mock_supabase,
+            anthropic_api_key="test-key",
+            hedra_api_key="hedra-key",
+            cartesia_api_key="cartesia-key",
+            google_api_key="google-key"
+        )
+        
+        # Mock cartoonization to fail
+        with patch.object(orchestrator, '_cartoonize_avatar_update', side_effect=Exception("Cartoonization error")):
+            result = await orchestrator.process_avatar_update(
+                session_id='session-123',
+                user_id='user-456',
+                picture_id='user-456/pic.png'
+            )
+            
+            assert result['status'] == 'error'
+            assert 'Cartoonization' in result['error']
+    
+    @pytest.mark.asyncio
+    async def test_avatar_update_hedra_failure(self, mock_supabase):
+        """Test avatar update fails when Hedra generation fails."""
+        orchestrator = PostCallOrchestrator(
+            supabase_client=mock_supabase,
+            anthropic_api_key="test-key",
+            hedra_api_key="hedra-key",
+            cartesia_api_key="cartesia-key",
+            google_api_key="google-key"
+        )
+        
+        # Mock cartoonization success, Hedra failure
+        with patch.object(orchestrator, '_cartoonize_avatar_update', return_value={'cartoonized_picture_id': 'cartoon.png'}):
+            with patch.object(orchestrator, '_generate_hedra_avatar_update', side_effect=Exception("Hedra error")):
+                result = await orchestrator.process_avatar_update(
+                    session_id='session-123',
+                    user_id='user-456',
+                    picture_id='user-456/pic.png'
+                )
+                
+                # Hedra failure is caught in _run_with_retry so the task will show error
+                assert 'hedra_avatar_generation' in result['tasks']
+                assert result['tasks']['hedra_avatar_generation']['status'] == 'error'
+
+
+class TestAvatarUpdateTaskMethods:
+    """Test individual avatar update task wrapper methods."""
+    
+    def test_cartoonize_avatar_update(self, mock_supabase):
+        """Test _cartoonize_avatar_update calls CartoonGenerator with correct params."""
+        orchestrator = PostCallOrchestrator(
+            supabase_client=mock_supabase,
+            google_api_key="google-key",
+            hedra_api_key="hedra-key",
+            cartesia_api_key="cartesia-key"
+        )
+        
+        with patch.object(orchestrator.cartoon_generator, 'cartoonize_image', return_value={'result': 'ok'}):
+            result = orchestrator._cartoonize_avatar_update(
+                user_id='user-456',
+                picture_id='user-456/pic.png',
+                session_id='session-123'
+            )
+            
+            assert result == {'result': 'ok'}
+            orchestrator.cartoon_generator.cartoonize_image.assert_called_once_with(
+                user_id='user-456',
+                picture_id='user-456/pic.png',
+                session_id='session-123'
+            )
+    
+    def test_generate_hedra_avatar_update(self, mock_supabase):
+        """Test _generate_hedra_avatar_update calls HedraAvatarGenerator with correct params."""
+        orchestrator = PostCallOrchestrator(
+            supabase_client=mock_supabase,
+            anthropic_api_key="test-key",
+            hedra_api_key="hedra-key",
+            cartesia_api_key="cartesia-key",
+            google_api_key="google-key"
+        )
+        
+        with patch.object(orchestrator.hedra_avatar_generator, 'generate_avatar', return_value={'result': 'ok'}):
+            result = orchestrator._generate_hedra_avatar_update(
+                user_id='user-456',
+                picture_id='user-456/pic.png',
+                session_id='session-123'
+            )
+            
+            assert result == {'result': 'ok'}
+            orchestrator.hedra_avatar_generator.generate_avatar.assert_called_once_with(
+                user_id='user-456',
+                picture_id='user-456/pic.png',
+                session_id='session-123'
+            )
+
