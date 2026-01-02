@@ -586,12 +586,12 @@ def update_session_avatar_endpoint():
 		
 		# Create record in user_avatar_images table
 		# The picture_id from frontend is in format: {user_id}/{uuid}.png
-		# We need to extract just the filename part for consistency
+		# Use "user_upload" as the picture_source since this is a user-initiated upload
 		avatar_record = {
 			"user_id": user_id,
 			"picture_id": picture_id,
 			"session_id": session_id,
-			"picture_source": "avatar_update"
+			"picture_source": "user_upload"
 		}
 		
 		response = supabase.table("user_avatar_images").insert(avatar_record).execute()

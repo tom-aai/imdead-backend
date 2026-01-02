@@ -155,7 +155,11 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
         """
         try:
             # Build the full storage path: {user_id}/{picture_id}
-            storage_path = f"{user_id}/{picture_id}" if user_id else picture_id
+            # If picture_id already contains a path (has '/'), use it directly
+            if '/' in picture_id:
+                storage_path = picture_id
+            else:
+                storage_path = f"{user_id}/{picture_id}" if user_id else picture_id
             logger.debug(f"Downloading image {storage_path} from avatar-images-bucket")
             
             # Download from Supabase storage
