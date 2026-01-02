@@ -94,10 +94,11 @@ class HedraAvatarGenerator:
                 hedra_avatar_id=hedra_avatar_id
             )
             
-            # Step 5: Update interview_call_analysis table with hedra_avatar_id
+            # Step 5: Update interview_call_analysis table with hedra_avatar_id and cartoon_id
             self._update_interview_analysis(
                 session_id=session_id,
-                hedra_avatar_id=hedra_avatar_id
+                hedra_avatar_id=hedra_avatar_id,
+                cartoon_id=cartoon_id
             )
             
             logger.info(f"Hedra avatar generation completed for picture {picture_id}, cartoon {cartoon_id} (hedra_avatar_id: {hedra_avatar_id})")
@@ -336,13 +337,18 @@ class HedraAvatarGenerator:
         else:
             raise Exception(f"Failed to update user_avatar_images for user {user_id}, picture {picture_id}. Row may not exist.")
     
-    def _update_interview_analysis(self, session_id: str, hedra_avatar_id: str) -> dict:
+    def _update_interview_analysis(self, session_id: str, hedra_avatar_id: str, cartoon_id: str) -> dict:
         """
-        Update interview_call_analysis table with hedra_avatar_id.
+        Update interview_call_analysis table with hedra_avatar_id and cartoon_id.
+        
+        This makes interview_call_analysis the single source of truth for:
+        - Which Hedra avatar to use for the chat agent (hedra_avatar_id)
+        - Which cartoon image to display in the dashboard (cartoon_id)
         
         Args:
             session_id: The LiveKit session ID
             hedra_avatar_id: The Hedra avatar ID
+            cartoon_id: The cartoon image filename in storage
             
         Returns:
             dict: The updated record from Supabase
@@ -350,13 +356,18 @@ class HedraAvatarGenerator:
         Raises:
             Exception: If update fails
         """
+        update_data = {
+            "hedra_avatar_id": hedra_avatar_id,
+            "cartoon_id": cartoon_id
+        }
+        
         response = self.supabase.table("interview_call_analysis")\
-            .update({"hedra_avatar_id": hedra_avatar_id})\
+            .update(update_data)\
             .eq("session_id", session_id)\
             .execute()
         
         if response.data:
-            logger.debug(f"Updated interview_call_analysis table with hedra_avatar_id: {hedra_avatar_id} for session {session_id}")
+            logger.debug(f"Updated interview_call_analysis table with hedra_avatar_id: {hedra_avatar_id}, cartoon_id: {cartoon_id} for session {session_id}")
             return response.data[0]
         else:
             raise Exception(f"Failed to update interview_call_analysis for session {session_id}. Row may not exist.")

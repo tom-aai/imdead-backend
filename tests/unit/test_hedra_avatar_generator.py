@@ -55,7 +55,7 @@ class TestGenerateAvatar:
             with patch.object(generator, '_download_image_from_storage', return_value='/tmp/test.png'):
                 with patch.object(generator, '_upload_to_hedra', return_value='hedra-avatar-123'):
                     with patch.object(generator, '_update_user_avatar_images'):
-                        with patch.object(generator, '_update_interview_analysis'):
+                        with patch.object(generator, '_update_interview_analysis') as mock_update_analysis:
                             result = generator.generate_avatar(
                                 user_id='user-456',
                                 picture_id='original-pic.jpg',
@@ -67,6 +67,13 @@ class TestGenerateAvatar:
                             assert result['picture_id'] == 'original-pic.jpg'
                             assert result['cartoon_id'] == 'cartoon-pic.png'
                             assert result['hedra_avatar_id'] == 'hedra-avatar-123'
+                            
+                            # Verify _update_interview_analysis is called with both hedra_avatar_id and cartoon_id
+                            mock_update_analysis.assert_called_once_with(
+                                session_id='session-123',
+                                hedra_avatar_id='hedra-avatar-123',
+                                cartoon_id='cartoon-pic.png'
+                            )
     
     def test_missing_user_id(self, mock_supabase):
         """Test error when user_id is missing."""
@@ -355,11 +362,12 @@ class TestUpdateUserAvatarImages:
 class TestUpdateInterviewAnalysis:
     """Test _update_interview_analysis method."""
     
-    def test_successful_update(self, mock_supabase):
-        """Test successful interview_call_analysis update."""
+    def test_successful_update_with_both_fields(self, mock_supabase):
+        """Test successful interview_call_analysis update with both hedra_avatar_id and cartoon_id."""
         expected_record = {
             'session_id': 'session-123',
-            'hedra_avatar_id': 'hedra-123'
+            'hedra_avatar_id': 'hedra-123',
+            'cartoon_id': 'user-456/cartoon-pic.png'
         }
         
         mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value.data = [expected_record]
@@ -367,15 +375,21 @@ class TestUpdateInterviewAnalysis:
         generator = HedraAvatarGenerator(mock_supabase, hedra_api_key="test-key")
         result = generator._update_interview_analysis(
             session_id='session-123',
-            hedra_avatar_id='hedra-123'
+            hedra_avatar_id='hedra-123',
+            cartoon_id='user-456/cartoon-pic.png'
         )
         
         assert result['session_id'] == 'session-123'
+        assert result['hedra_avatar_id'] == 'hedra-123'
+        assert result['cartoon_id'] == 'user-456/cartoon-pic.png'
         
-        # Verify correct table and update
+        # Verify correct table and update with both fields
         mock_supabase.table.assert_called_with("interview_call_analysis")
         update_call = mock_supabase.table.return_value.update
-        update_call.assert_called_with({"hedra_avatar_id": "hedra-123"})
+        update_call.assert_called_with({
+            "hedra_avatar_id": "hedra-123",
+            "cartoon_id": "user-456/cartoon-pic.png"
+        })
     
     def test_update_no_matching_session(self, mock_supabase):
         """Test error when session doesn't exist."""
@@ -386,6 +400,40 @@ class TestUpdateInterviewAnalysis:
         with pytest.raises(Exception, match="Failed to update interview_call_analysis"):
             generator._update_interview_analysis(
                 session_id='nonexistent',
-                hedra_avatar_id='hedra-123'
+                hedra_avatar_id='hedra-123',
+                cartoon_id='cartoon.png'
             )
+    
+    def test_interview_analysis_is_source_of_truth(self, mock_supabase):
+        """
+        Test that interview_call_analysis is updated with both hedra_avatar_id and cartoon_id,
+        making it the single source of truth for avatar data.
+        
+        This enables:
+        - Dashboard to display avatar image using cartoon_id from interview_call_analysis
+        - Chat agent to use hedra_avatar_id from interview_call_analysis
+        """
+        expected_record = {
+            'session_id': 'session-123',
+            'hedra_avatar_id': 'hedra-avatar-xyz',
+            'cartoon_id': 'user-123/uuid_cartoon.png'
+        }
+        
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value.data = [expected_record]
+        
+        generator = HedraAvatarGenerator(mock_supabase, hedra_api_key="test-key")
+        result = generator._update_interview_analysis(
+            session_id='session-123',
+            hedra_avatar_id='hedra-avatar-xyz',
+            cartoon_id='user-123/uuid_cartoon.png'
+        )
+        
+        # Verify both fields are stored together
+        update_call = mock_supabase.table.return_value.update
+        call_args = update_call.call_args.args[0]
+        
+        assert 'hedra_avatar_id' in call_args
+        assert 'cartoon_id' in call_args
+        assert call_args['hedra_avatar_id'] == 'hedra-avatar-xyz'
+        assert call_args['cartoon_id'] == 'user-123/uuid_cartoon.png'
 
