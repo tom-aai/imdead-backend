@@ -183,3 +183,22 @@ def mock_cartesia_client():
     
     return mock
 
+
+@pytest.fixture
+def mock_inworld_response():
+    """Mock Inworld API response for voice cloning."""
+    return {
+        "voice": {
+            "voiceId": "inworld-cloned-voice-id-456",
+            "displayName": "user-456",
+            "name": "workspaces/test-workspace/voices/inworld-cloned-voice-id-456"
+        },
+        "audioSamplesValidated": [
+            {
+                "transcription": "Test audio transcription",
+                "warnings": [],
+                "errors": []
+            }
+        ]
+    }
+

@@ -22,7 +22,17 @@ class PostCallOrchestrator:
     Handles task execution, retries, and error management.
     """
     
-    def __init__(self, supabase_client, anthropic_api_key: str = None, hedra_api_key: str = None, cartesia_api_key: str = None, google_api_key: str = None):
+    def __init__(
+        self,
+        supabase_client,
+        anthropic_api_key: str = None,
+        hedra_api_key: str = None,
+        cartesia_api_key: str = None,
+        google_api_key: str = None,
+        inworld_api_key: str = None,
+        inworld_workspace_id: str = None,
+        voice_provider: str = "inworld"
+    ):
         """
         Initialize the post-call orchestrator.
         
@@ -32,13 +42,22 @@ class PostCallOrchestrator:
             hedra_api_key: Hedra API key (optional, will use env var if not provided)
             cartesia_api_key: Cartesia API key (optional, will use env var if not provided)
             google_api_key: Google API key (optional, will use env var if not provided)
+            inworld_api_key: Inworld API key (optional, will use env var if not provided)
+            inworld_workspace_id: Inworld workspace ID (optional, will use env var if not provided)
+            voice_provider: Voice cloning provider ("inworld" or "cartesia", default: "inworld")
         """
         self.supabase = supabase_client
         self.transcript_processor = TranscriptProcessor(supabase_client, anthropic_api_key)
         self.profile_aggregator = ProfileAggregator(supabase_client, anthropic_api_key)
         self.cartoon_generator = CartoonGenerator(supabase_client, google_api_key)
         self.hedra_avatar_generator = HedraAvatarGenerator(supabase_client, hedra_api_key)
-        self.voice_cloning_service = VoiceCloningService(supabase_client, cartesia_api_key)
+        self.voice_cloning_service = VoiceCloningService(
+            supabase_client,
+            voice_provider=voice_provider,
+            cartesia_api_key=cartesia_api_key,
+            inworld_api_key=inworld_api_key,
+            inworld_workspace_id=inworld_workspace_id
+        )
     
     async def process_call_completion(self, session_id: str) -> Dict[str, Any]:
         """

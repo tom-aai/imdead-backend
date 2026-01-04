@@ -7,6 +7,8 @@ Tests cover:
 - Silero VAD for speech detection
 - Audio segment stitching
 - Cartesia voice cloning integration
+- Inworld voice cloning integration
+- Provider selection (Cartesia vs Inworld)
 - Call type filtering (onboarding vs interview)
 - User profile updates
 - Error handling and edge cases
@@ -18,6 +20,7 @@ import tempfile
 import numpy as np
 from unittest.mock import MagicMock, Mock, patch, call
 from pydub import AudioSegment
+import requests
 
 from services.voice_cloner import VoiceCloningService
 
@@ -25,26 +28,84 @@ from services.voice_cloner import VoiceCloningService
 class TestVoiceCloningServiceInit:
     """Test VoiceCloningService initialization."""
     
-    def test_init_with_api_key(self, mock_supabase):
-        """Test initialization with API key provided."""
+    def test_init_with_cartesia_api_key(self, mock_supabase):
+        """Test initialization with Cartesia API key provided."""
         service = VoiceCloningService(mock_supabase, cartesia_api_key="test-api-key")
         
         assert service.supabase == mock_supabase
         assert service.cartesia is not None
     
-    def test_init_without_api_key(self, mock_supabase):
-        """Test initialization uses env var when no key provided."""
+    def test_init_without_cartesia_api_key(self, mock_supabase):
+        """Test initialization uses env var when no Cartesia key provided."""
         with patch.dict('os.environ', {'CARTESIA_API_KEY': 'env-api-key'}):
             service = VoiceCloningService(mock_supabase, cartesia_api_key=None)
             assert service.cartesia is not None
+    
+    def test_init_with_inworld_credentials(self, mock_supabase):
+        """Test initialization with Inworld credentials."""
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-inworld-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        assert service.inworld_api_key == "test-inworld-key"
+        assert service.inworld_workspace_id == "test-workspace"
+    
+    def test_init_inworld_from_env_vars(self, mock_supabase):
+        """Test initialization uses env vars for Inworld when not provided."""
+        with patch.dict('os.environ', {
+            'INWORLD_API_KEY': 'env-inworld-key',
+            'INWORLD_WORKSPACE_ID': 'env-workspace'
+        }):
+            service = VoiceCloningService(mock_supabase)
+            assert service.inworld_api_key == 'env-inworld-key'
+            assert service.inworld_workspace_id == 'env-workspace'
+    
+    def test_default_provider_is_inworld(self, mock_supabase):
+        """Test that default voice provider is Inworld."""
+        service = VoiceCloningService(mock_supabase)
+        assert service.voice_provider == "inworld"
+    
+    def test_explicit_provider_setting(self, mock_supabase):
+        """Test explicit provider setting."""
+        service = VoiceCloningService(mock_supabase, voice_provider="cartesia")
+        assert service.voice_provider == "cartesia"
 
 
 class TestProcessVoiceRecording:
     """Test the main process_voice_recording method."""
     
-    def test_successful_processing_onboarding_call(self, mock_supabase, mock_cartesia_client):
-        """Test successful voice cloning for onboarding call."""
-        service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
+    def test_successful_processing_onboarding_call_with_inworld(self, mock_supabase):
+        """Test successful voice cloning for onboarding call using Inworld (default)."""
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-inworld-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        # Mock the internal methods to avoid complex mock chaining
+        with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding', 'user-456')):
+            with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
+                with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
+                    with patch.object(service, '_get_user_id_from_session', return_value='user-456'):
+                        with patch.object(service, '_clone_voice_with_inworld', return_value='inworld-voice-id-123'):
+                            with patch.object(service, '_update_user_profile_voice_id'):
+                                result = service.process_voice_recording('session-123')
+                                
+                                assert result['status'] == 'success'
+                                assert result['session_id'] == 'session-123'
+                                assert result['recording_id'] == 'rec-123'
+                                assert result['user_id'] == 'user-456'
+                                assert result['voice_id'] == 'inworld-voice-id-123'
+    
+    def test_successful_processing_onboarding_call_with_cartesia(self, mock_supabase, mock_cartesia_client):
+        """Test successful voice cloning for onboarding call using Cartesia."""
+        service = VoiceCloningService(
+            mock_supabase,
+            voice_provider="cartesia",
+            cartesia_api_key="test-key"
+        )
         service.cartesia = mock_cartesia_client
         
         # Mock the internal methods to avoid complex mock chaining
@@ -64,7 +125,7 @@ class TestProcessVoiceRecording:
     
     def test_skip_non_onboarding_call(self, mock_supabase):
         """Test that non-onboarding calls are skipped."""
-        service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
+        service = VoiceCloningService(mock_supabase)
         
         # Mock _get_recording_info to return interview call
         with patch.object(service, '_get_recording_info', return_value=('rec-123', 'interview', 'user-456')):
@@ -76,7 +137,7 @@ class TestProcessVoiceRecording:
     
     def test_missing_session_id(self, mock_supabase):
         """Test error when session_id is missing."""
-        service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
+        service = VoiceCloningService(mock_supabase)
         
         with pytest.raises(ValueError, match="session_id is required"):
             service.process_voice_recording(None)
@@ -87,7 +148,7 @@ class TestProcessVoiceRecording:
             {'recording_id': None, 'call_type': 'onboarding', 'user_id': 'user-456'}
         ]
         
-        service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
+        service = VoiceCloningService(mock_supabase)
         
         with pytest.raises(ValueError, match="No recording_id found"):
             service.process_voice_recording('session-123')
@@ -225,6 +286,234 @@ class TestCloneVoiceWithCartesia:
         finally:
             if os.path.exists(audio_path):
                 os.unlink(audio_path)
+
+
+class TestCloneVoiceWithInworld:
+    """Test _clone_voice_with_inworld method."""
+    
+    def test_successful_cloning(self, mock_supabase, mock_inworld_response):
+        """Test successful voice cloning with Inworld."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            temp_file.write(b'fake wav data')
+            temp_file.flush()
+            audio_path = temp_file.name
+        
+        service = VoiceCloningService(
+            mock_supabase,
+            voice_provider="inworld",
+            inworld_api_key="test-inworld-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        try:
+            with patch('services.voice_cloner.requests.post') as mock_post:
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = mock_inworld_response
+                mock_post.return_value = mock_response
+                
+                result = service._clone_voice_with_inworld(audio_path, 'user-456')
+                
+                assert result == 'inworld-cloned-voice-id-456'
+                
+                # Verify Inworld API was called correctly
+                mock_post.assert_called_once()
+                call_args = mock_post.call_args
+                assert 'api.inworld.ai' in call_args[0][0]
+                assert 'voices:clone' in call_args[0][0]
+                assert call_args[1]['headers']['Authorization'] == 'Basic test-inworld-key'
+                
+                # Verify payload
+                payload = call_args[1]['json']
+                assert payload['displayName'] == 'user-456'
+                assert payload['langCode'] == 'EN_US'
+                assert 'voiceSamples' in payload
+                assert len(payload['voiceSamples']) == 1
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+    
+    def test_file_not_found(self, mock_supabase):
+        """Test error when audio file doesn't exist."""
+        service = VoiceCloningService(
+            mock_supabase,
+            voice_provider="inworld",
+            inworld_api_key="test-inworld-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        with pytest.raises(Exception, match="Voice cloning failed"):
+            service._clone_voice_with_inworld('/nonexistent/path.wav', 'user-456')
+    
+    def test_missing_api_key(self, mock_supabase):
+        """Test error when Inworld API key is not configured."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            temp_file.write(b'fake wav data')
+            temp_file.flush()
+            audio_path = temp_file.name
+        
+        service = VoiceCloningService(
+            mock_supabase,
+            voice_provider="inworld",
+            inworld_api_key=None,
+            inworld_workspace_id="test-workspace"
+        )
+        # Clear env var if set
+        service.inworld_api_key = None
+        
+        try:
+            with pytest.raises(Exception, match="Voice cloning failed"):
+                service._clone_voice_with_inworld(audio_path, 'user-456')
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+    
+    def test_missing_workspace_id(self, mock_supabase):
+        """Test error when Inworld workspace ID is not configured."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            temp_file.write(b'fake wav data')
+            temp_file.flush()
+            audio_path = temp_file.name
+        
+        service = VoiceCloningService(
+            mock_supabase,
+            voice_provider="inworld",
+            inworld_api_key="test-inworld-key",
+            inworld_workspace_id=None
+        )
+        # Clear env var if set
+        service.inworld_workspace_id = None
+        
+        try:
+            with pytest.raises(Exception, match="Voice cloning failed"):
+                service._clone_voice_with_inworld(audio_path, 'user-456')
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+    
+    def test_api_error(self, mock_supabase):
+        """Test error handling when Inworld API fails."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            temp_file.write(b'fake wav data')
+            temp_file.flush()
+            audio_path = temp_file.name
+        
+        service = VoiceCloningService(
+            mock_supabase,
+            voice_provider="inworld",
+            inworld_api_key="test-inworld-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        try:
+            with patch('services.voice_cloner.requests.post') as mock_post:
+                mock_response = MagicMock()
+                mock_response.status_code = 500
+                mock_response.text = "Internal Server Error"
+                mock_post.return_value = mock_response
+                
+                with pytest.raises(Exception, match="Voice cloning failed"):
+                    service._clone_voice_with_inworld(audio_path, 'user-456')
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+    
+    def test_workspace_id_prefix_handling(self, mock_supabase, mock_inworld_response):
+        """Test that workspace ID with 'workspaces/' prefix is handled correctly."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            temp_file.write(b'fake wav data')
+            temp_file.flush()
+            audio_path = temp_file.name
+        
+        # Test with already-prefixed workspace ID
+        service = VoiceCloningService(
+            mock_supabase,
+            voice_provider="inworld",
+            inworld_api_key="test-inworld-key",
+            inworld_workspace_id="workspaces/test-workspace"
+        )
+        
+        try:
+            with patch('services.voice_cloner.requests.post') as mock_post:
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = mock_inworld_response
+                mock_post.return_value = mock_response
+                
+                result = service._clone_voice_with_inworld(audio_path, 'user-456')
+                
+                # Verify URL doesn't double the prefix
+                call_args = mock_post.call_args
+                url = call_args[0][0]
+                assert 'workspaces/workspaces/' not in url
+                assert 'workspaces/test-workspace' in url
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+
+
+class TestProviderSelection:
+    """Test voice provider selection."""
+    
+    def test_default_provider_is_inworld(self, mock_supabase):
+        """Test that default provider is Inworld."""
+        service = VoiceCloningService(mock_supabase)
+        assert service.voice_provider == "inworld"
+    
+    def test_explicit_inworld_provider(self, mock_supabase):
+        """Test explicitly setting Inworld provider."""
+        service = VoiceCloningService(mock_supabase, voice_provider="inworld")
+        assert service.voice_provider == "inworld"
+    
+    def test_cartesia_provider(self, mock_supabase):
+        """Test setting Cartesia provider."""
+        service = VoiceCloningService(mock_supabase, voice_provider="cartesia")
+        assert service.voice_provider == "cartesia"
+    
+    def test_process_uses_inworld_by_default(self, mock_supabase, mock_inworld_response):
+        """Test that process_voice_recording uses Inworld by default."""
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding', 'user-456')):
+            with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
+                with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
+                    with patch.object(service, '_get_user_id_from_session', return_value='user-456'):
+                        with patch.object(service, '_clone_voice_with_inworld', return_value='inworld-voice-id') as mock_inworld:
+                            with patch.object(service, '_clone_voice_with_cartesia') as mock_cartesia:
+                                with patch.object(service, '_update_user_profile_voice_id'):
+                                    result = service.process_voice_recording('session-123')
+                                    
+                                    # Verify Inworld was called, not Cartesia
+                                    mock_inworld.assert_called_once()
+                                    mock_cartesia.assert_not_called()
+                                    assert result['voice_id'] == 'inworld-voice-id'
+    
+    def test_process_uses_cartesia_when_specified(self, mock_supabase, mock_cartesia_client):
+        """Test that process_voice_recording uses Cartesia when specified."""
+        service = VoiceCloningService(
+            mock_supabase,
+            voice_provider="cartesia",
+            cartesia_api_key="test-key"
+        )
+        service.cartesia = mock_cartesia_client
+        
+        with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding', 'user-456')):
+            with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
+                with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
+                    with patch.object(service, '_get_user_id_from_session', return_value='user-456'):
+                        with patch.object(service, '_clone_voice_with_inworld') as mock_inworld:
+                            with patch.object(service, '_clone_voice_with_cartesia', return_value='cartesia-voice-id') as mock_cartesia:
+                                with patch.object(service, '_update_user_profile_voice_id'):
+                                    result = service.process_voice_recording('session-123')
+                                    
+                                    # Verify Cartesia was called, not Inworld
+                                    mock_cartesia.assert_called_once()
+                                    mock_inworld.assert_not_called()
+                                    assert result['voice_id'] == 'cartesia-voice-id'
 
 
 class TestUpdateUserProfileVoiceId:

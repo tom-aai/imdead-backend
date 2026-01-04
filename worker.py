@@ -46,6 +46,8 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 HEDRA_API_KEY = os.getenv("HEDRA_API_KEY")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+INWORLD_API_KEY = os.getenv("INWORLD_API_KEY")
+INWORLD_WORKSPACE_ID = os.getenv("INWORLD_WORKSPACE_ID")
 
 POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", "5"))  # seconds
 STUCK_JOB_TIMEOUT = int(os.getenv("STUCK_JOB_TIMEOUT", "30"))  # minutes
@@ -67,7 +69,9 @@ class JobWorker:
             anthropic_api_key=ANTHROPIC_API_KEY,
             hedra_api_key=HEDRA_API_KEY,
             cartesia_api_key=CARTESIA_API_KEY,
-            google_api_key=GOOGLE_API_KEY
+            google_api_key=GOOGLE_API_KEY,
+            inworld_api_key=INWORLD_API_KEY,
+            inworld_workspace_id=INWORLD_WORKSPACE_ID
         )
         self.hot_take_service = HotTakeVideoGenerationService(
             supabase_client=self.supabase,

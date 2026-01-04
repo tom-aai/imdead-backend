@@ -36,6 +36,8 @@ def setup_clients():
     HEDRA_API_KEY = os.getenv("HEDRA_API_KEY")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
+    INWORLD_API_KEY = os.getenv("INWORLD_API_KEY")
+    INWORLD_WORKSPACE_ID = os.getenv("INWORLD_WORKSPACE_ID")
     
     if not all([SUPABASE_URL, SUPABASE_SERVICE_KEY, ANTHROPIC_API_KEY]):
         logger.error("Missing required environment variables")
@@ -53,8 +55,14 @@ def setup_clients():
     if not GOOGLE_API_KEY:
         logger.warning("  - GOOGLE_API_KEY not set (image cartoonization will be unavailable)")
     
+    if not INWORLD_API_KEY:
+        logger.warning("  - INWORLD_API_KEY not set (Inworld voice cloning will be unavailable)")
+    
+    if not INWORLD_WORKSPACE_ID:
+        logger.warning("  - INWORLD_WORKSPACE_ID not set (Inworld voice cloning will be unavailable)")
+    
     supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-    return supabase, ANTHROPIC_API_KEY, HEDRA_API_KEY, GOOGLE_API_KEY, CARTESIA_API_KEY
+    return supabase, ANTHROPIC_API_KEY, HEDRA_API_KEY, GOOGLE_API_KEY, CARTESIA_API_KEY, INWORLD_API_KEY, INWORLD_WORKSPACE_ID
 
 
 def cleanup_existing_records(supabase, session_id: str, task_name: str = None):
@@ -412,7 +420,7 @@ Examples:
     try:
         # Setup clients
         logger.info("Initializing clients...")
-        supabase, anthropic_key, hedra_key, google_key, cartesia_key = setup_clients()
+        supabase, anthropic_key, hedra_key, google_key, cartesia_key, inworld_key, inworld_workspace = setup_clients()
         
         # Check if this is a direct avatar generation request
         if args.user_id or args.picture_id:
@@ -433,7 +441,15 @@ Examples:
                 sys.exit(1)
             
             # Initialize orchestrator with production services
-            orchestrator = PostCallOrchestrator(supabase, anthropic_key, hedra_key, cartesia_key, google_key)
+            orchestrator = PostCallOrchestrator(
+                supabase_client=supabase,
+                anthropic_api_key=anthropic_key,
+                hedra_api_key=hedra_key,
+                cartesia_api_key=cartesia_key,
+                google_api_key=google_key,
+                inworld_api_key=inworld_key,
+                inworld_workspace_id=inworld_workspace
+            )
             
             # Run orchestration based on arguments
             if args.task:

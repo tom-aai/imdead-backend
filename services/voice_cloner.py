@@ -2,10 +2,12 @@
 Voice cloning service.
 """
 
+import base64
 import os
 import logging
 import tempfile
 import torch
+import requests
 from pydub import AudioSegment
 import numpy as np
 from cartesia import Cartesia
@@ -16,16 +18,33 @@ logger = logging.getLogger(__name__)
 class VoiceCloningService:
     """Service for processing voice recordings for cloning."""
     
-    def __init__(self, supabase_client, cartesia_api_key: str = None):
+    def __init__(
+        self,
+        supabase_client,
+        voice_provider: str = "inworld",
+        cartesia_api_key: str = None,
+        inworld_api_key: str = None,
+        inworld_workspace_id: str = None
+    ):
         """
         Initialize the voice cloning service.
         
         Args:
             supabase_client: Initialized Supabase client
+            voice_provider: Voice cloning provider to use ("inworld" or "cartesia", default: "inworld")
             cartesia_api_key: Cartesia API key (optional, will use env var if not provided)
+            inworld_api_key: Inworld API key (optional, will use env var if not provided)
+            inworld_workspace_id: Inworld workspace ID (optional, will use env var if not provided)
         """
         self.supabase = supabase_client
+        self.voice_provider = voice_provider
+        
+        # Cartesia setup
         self.cartesia = Cartesia(api_key=cartesia_api_key or os.getenv("CARTESIA_API_KEY"))
+        
+        # Inworld setup
+        self.inworld_api_key = inworld_api_key or os.getenv("INWORLD_API_KEY")
+        self.inworld_workspace_id = inworld_workspace_id or os.getenv("INWORLD_WORKSPACE_ID")
     
     def process_voice_recording(self, session_id: str) -> dict:
         """
@@ -36,7 +55,7 @@ class VoiceCloningService:
         2. Download recording from Supabase storage
         3. Process audio (silence removal, VAD)
         4. Get user_id from interview_calls table
-        5. Clone voice with Cartesia
+        5. Clone voice with configured provider (Inworld or Cartesia)
         6. Update user_profiles with voice_id
         
         Args:
@@ -97,10 +116,14 @@ class VoiceCloningService:
             if not user_id:
                 raise ValueError(f"No user_id found for session {session_id}")
             
-            # Step 5: Clone voice with Cartesia
-            voice_id = self._clone_voice_with_cartesia(processed_path, user_id)
-            
-            logger.info(f"Voice cloned successfully with Cartesia. Voice ID: {voice_id}")
+            # Step 5: Clone voice with configured provider
+            if self.voice_provider == "cartesia":
+                voice_id = self._clone_voice_with_cartesia(processed_path, user_id)
+                logger.info(f"Voice cloned successfully with Cartesia. Voice ID: {voice_id}")
+            else:
+                # Default to Inworld
+                voice_id = self._clone_voice_with_inworld(processed_path, user_id)
+                logger.info(f"Voice cloned successfully with Inworld. Voice ID: {voice_id}")
             
             # Step 6: Update user_profiles table with voice_id
             self._update_user_profile_voice_id(user_id, voice_id)
@@ -459,6 +482,94 @@ class VoiceCloningService:
             logger.error(f"Failed to clone voice with Cartesia: {e}")
             raise Exception(f"Voice cloning failed: {e}")
     
+    def _clone_voice_with_inworld(self, audio_file_path: str, user_id: str) -> str:
+        """
+        Clone voice using Inworld API.
+        
+        Args:
+            audio_file_path: Path to the processed audio file (WAV)
+            user_id: The user's ID (used for naming the voice)
+            
+        Returns:
+            str: The voiceId from Inworld
+            
+        Raises:
+            Exception: If cloning fails
+        """
+        try:
+            if not os.path.exists(audio_file_path):
+                raise FileNotFoundError(f"Audio file not found at: {audio_file_path}")
+            
+            if not self.inworld_api_key:
+                raise ValueError("Inworld API key not configured")
+            
+            if not self.inworld_workspace_id:
+                raise ValueError("Inworld workspace ID not configured")
+            
+            voice_name = user_id
+            
+            logger.info(f"Cloning voice with Inworld: '{voice_name}'")
+            
+            # Read audio file and encode as base64
+            with open(audio_file_path, 'rb') as f:
+                audio_data = f.read()
+            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+            
+            logger.debug(f"Audio file size: {len(audio_data):,} bytes")
+            
+            # Format workspace path
+            workspace_id = self.inworld_workspace_id
+            if not workspace_id.startswith("workspaces/"):
+                workspace_path = f"workspaces/{workspace_id}"
+            else:
+                workspace_path = workspace_id
+            
+            url = f"https://api.inworld.ai/voices/v1/{workspace_path}/voices:clone"
+            
+            headers = {
+                "Authorization": f"Basic {self.inworld_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "displayName": voice_name,
+                "langCode": "EN_US",
+                "voiceSamples": [
+                    {
+                        "audioData": audio_base64
+                    }
+                ]
+            }
+            
+            logger.debug(f"Calling Inworld API: {url}")
+            
+            response = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=300  # Voice cloning can take a while
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Inworld API error: {response.status_code} - {response.text}")
+                raise Exception(f"Inworld API returned status {response.status_code}: {response.text}")
+            
+            result = response.json()
+            
+            # Extract voice ID from response
+            voice = result.get("voice", {})
+            voice_id = voice.get("voiceId")
+            
+            if not voice_id:
+                raise Exception(f"No voiceId in Inworld response: {result}")
+            
+            logger.info(f"Voice cloned successfully with Inworld. Voice ID: {voice_id}")
+            return voice_id
+            
+        except Exception as e:
+            logger.error(f"Failed to clone voice with Inworld: {e}")
+            raise Exception(f"Voice cloning failed: {e}")
+    
     def _get_user_id_from_session(self, session_id: str) -> str:
         """
         Get user_id from interview_calls table.
@@ -497,7 +608,7 @@ class VoiceCloningService:
         
         Args:
             user_id: The user's ID
-            voice_id: The voice_id from Cartesia
+            voice_id: The voice_id from the voice cloning provider (Inworld or Cartesia)
             
         Raises:
             Exception: If update fails
