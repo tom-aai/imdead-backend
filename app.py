@@ -549,6 +549,86 @@ def get_hot_take_job_status(job_id: str):
 		return jsonify({"error": str(e)}), 500
 
 
+@app.route("/sessions/<session_id>", methods=["PATCH"])
+def update_session_endpoint(session_id: str):
+	"""
+	Update a session's metadata (e.g., main_topic/title).
+	
+	Authenticated via Supabase JWT token (user auth).
+	
+	Args:
+		session_id: The session ID to update
+	
+	Request body:
+		- main_topic: The new title for the session (required, non-empty string)
+	
+	Returns:
+		- success: True if updated
+		- main_topic: The updated main_topic value
+	"""
+	try:
+		# Verify user authentication via Supabase JWT
+		auth_header = request.headers.get('Authorization')
+		user = _verify_supabase_user(auth_header)
+		
+		if not user:
+			return jsonify({"error": "Unauthorized"}), 401
+		
+		user_id = user["id"]
+		
+		# Get request data (silent=True to handle missing/invalid JSON gracefully)
+		data = request.get_json(silent=True)
+		
+		if not data:
+			return jsonify({"error": "Request body is required"}), 400
+		
+		main_topic = data.get("main_topic")
+		
+		# Validate input
+		if main_topic is None:
+			return jsonify({"error": "main_topic is required"}), 400
+		
+		if not isinstance(main_topic, str) or not main_topic.strip():
+			return jsonify({"error": "main_topic must be a non-empty string"}), 400
+		
+		trimmed_topic = main_topic.strip()
+		
+		# Verify the session exists and belongs to this user
+		session_response = supabase.table("interview_call_analysis")\
+			.select("user_id")\
+			.eq("session_id", session_id)\
+			.limit(1)\
+			.execute()
+		
+		if not session_response.data or len(session_response.data) == 0:
+			return jsonify({"error": "Session not found"}), 404
+		
+		session_user_id = session_response.data[0].get("user_id")
+		if session_user_id != user_id:
+			return jsonify({"error": "Forbidden - session belongs to another user"}), 403
+		
+		# Update the main_topic in interview_call_analysis
+		update_response = supabase.table("interview_call_analysis")\
+			.update({"main_topic": trimmed_topic})\
+			.eq("session_id", session_id)\
+			.execute()
+		
+		if not update_response.data:
+			logger.error(f"Failed to update session {session_id}")
+			return jsonify({"error": "Failed to update session"}), 500
+		
+		logger.info(f"Updated main_topic for session {session_id}")
+		
+		return jsonify({
+			"success": True,
+			"main_topic": trimmed_topic
+		}), 200
+		
+	except Exception as e:
+		logger.error(f"Error updating session: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
 @app.route("/update-session-avatar", methods=["POST"])
 @require_api_key
 def update_session_avatar_endpoint():
