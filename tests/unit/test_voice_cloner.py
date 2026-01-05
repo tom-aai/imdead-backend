@@ -9,7 +9,7 @@ Tests cover:
 - Cartesia voice cloning integration
 - Inworld voice cloning integration
 - Provider selection (Cartesia vs Inworld)
-- Call type filtering (onboarding vs interview)
+- First-time user voice cloning (existing voice_id check)
 - User profile updates
 - Error handling and edge cases
 """
@@ -76,8 +76,8 @@ class TestVoiceCloningServiceInit:
 class TestProcessVoiceRecording:
     """Test the main process_voice_recording method."""
     
-    def test_successful_processing_onboarding_call_with_inworld(self, mock_supabase):
-        """Test successful voice cloning for onboarding call using Inworld (default)."""
+    def test_successful_processing_first_time_user_with_inworld(self, mock_supabase):
+        """Test successful voice cloning for first-time user using Inworld (default)."""
         service = VoiceCloningService(
             mock_supabase,
             inworld_api_key="test-inworld-key",
@@ -86,21 +86,20 @@ class TestProcessVoiceRecording:
         
         # Mock the internal methods to avoid complex mock chaining
         with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding', 'user-456')):
-            with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
-                with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
-                    with patch.object(service, '_get_user_id_from_session', return_value='user-456'):
-                        with patch.object(service, '_clone_voice_with_inworld', return_value='inworld-voice-id-123'):
-                            with patch.object(service, '_update_user_profile_voice_id'):
-                                result = service.process_voice_recording('session-123')
-                                
-                                assert result['status'] == 'success'
-                                assert result['session_id'] == 'session-123'
-                                assert result['recording_id'] == 'rec-123'
-                                assert result['user_id'] == 'user-456'
-                                assert result['voice_id'] == 'inworld-voice-id-123'
+            with patch.object(service, '_get_existing_voice_id', return_value=None):  # First-time user
+                with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
+                    with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
+                        with patch.object(service, '_clone_voice_and_update_profile', return_value='inworld-voice-id-123'):
+                            result = service.process_voice_recording('session-123')
+                            
+                            assert result['status'] == 'success'
+                            assert result['session_id'] == 'session-123'
+                            assert result['recording_id'] == 'rec-123'
+                            assert result['user_id'] == 'user-456'
+                            assert result['voice_id'] == 'inworld-voice-id-123'
     
-    def test_successful_processing_onboarding_call_with_cartesia(self, mock_supabase, mock_cartesia_client):
-        """Test successful voice cloning for onboarding call using Cartesia."""
+    def test_successful_processing_first_time_user_with_cartesia(self, mock_supabase, mock_cartesia_client):
+        """Test successful voice cloning for first-time user using Cartesia."""
         service = VoiceCloningService(
             mock_supabase,
             voice_provider="cartesia",
@@ -110,30 +109,30 @@ class TestProcessVoiceRecording:
         
         # Mock the internal methods to avoid complex mock chaining
         with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding', 'user-456')):
-            with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
-                with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
-                    with patch.object(service, '_get_user_id_from_session', return_value='user-456'):
-                        with patch.object(service, '_clone_voice_with_cartesia', return_value='cloned-voice-id-123'):
-                            with patch.object(service, '_update_user_profile_voice_id'):
-                                result = service.process_voice_recording('session-123')
-                                
-                                assert result['status'] == 'success'
-                                assert result['session_id'] == 'session-123'
-                                assert result['recording_id'] == 'rec-123'
-                                assert result['user_id'] == 'user-456'
-                                assert result['voice_id'] == 'cloned-voice-id-123'
+            with patch.object(service, '_get_existing_voice_id', return_value=None):  # First-time user
+                with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
+                    with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
+                        with patch.object(service, '_clone_voice_and_update_profile', return_value='cloned-voice-id-123'):
+                            result = service.process_voice_recording('session-123')
+                            
+                            assert result['status'] == 'success'
+                            assert result['session_id'] == 'session-123'
+                            assert result['recording_id'] == 'rec-123'
+                            assert result['user_id'] == 'user-456'
+                            assert result['voice_id'] == 'cloned-voice-id-123'
     
-    def test_skip_non_onboarding_call(self, mock_supabase):
-        """Test that non-onboarding calls are skipped."""
+    def test_skip_user_with_existing_voice_id(self, mock_supabase):
+        """Test that users with existing voice_id are skipped."""
         service = VoiceCloningService(mock_supabase)
         
-        # Mock _get_recording_info to return interview call
-        with patch.object(service, '_get_recording_info', return_value=('rec-123', 'interview', 'user-456')):
-            result = service.process_voice_recording('session-123')
-            
-            assert result['status'] == 'skipped'
-            assert 'Voice cloning skipped' in result['message']
-            assert result['call_type'] == 'interview'
+        # Mock to return valid recording info, but user already has a voice clone
+        with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding', 'user-456')):
+            with patch.object(service, '_get_existing_voice_id', return_value='existing-voice-id-789'):
+                result = service.process_voice_recording('session-123')
+                
+                assert result['status'] == 'skipped'
+                assert 'user already has a voice clone' in result['message']
+                assert result['existing_voice_id'] == 'existing-voice-id-789'
     
     def test_missing_session_id(self, mock_supabase):
         """Test error when session_id is missing."""
@@ -479,9 +478,9 @@ class TestProviderSelection:
         )
         
         with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding', 'user-456')):
-            with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
-                with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
-                    with patch.object(service, '_get_user_id_from_session', return_value='user-456'):
+            with patch.object(service, '_get_existing_voice_id', return_value=None):  # First-time user
+                with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
+                    with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
                         with patch.object(service, '_clone_voice_with_inworld', return_value='inworld-voice-id') as mock_inworld:
                             with patch.object(service, '_clone_voice_with_cartesia') as mock_cartesia:
                                 with patch.object(service, '_update_user_profile_voice_id'):
@@ -502,9 +501,9 @@ class TestProviderSelection:
         service.cartesia = mock_cartesia_client
         
         with patch.object(service, '_get_recording_info', return_value=('rec-123', 'onboarding', 'user-456')):
-            with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
-                with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
-                    with patch.object(service, '_get_user_id_from_session', return_value='user-456'):
+            with patch.object(service, '_get_existing_voice_id', return_value=None):  # First-time user
+                with patch.object(service, '_download_recording', return_value='/tmp/recording.mp3'):
+                    with patch.object(service, '_process_audio', return_value='/tmp/processed.wav'):
                         with patch.object(service, '_clone_voice_with_inworld') as mock_inworld:
                             with patch.object(service, '_clone_voice_with_cartesia', return_value='cartesia-voice-id') as mock_cartesia:
                                 with patch.object(service, '_update_user_profile_voice_id'):
@@ -634,4 +633,230 @@ class TestStitchAudioSegments:
         result = service._stitch_audio_segments(mock_audio, segments, 250)
         
         assert result == mock_audio
+
+
+class TestCloneVoiceAndUpdateProfile:
+    """Test _clone_voice_and_update_profile helper method."""
+    
+    def test_uses_inworld_by_default(self, mock_supabase, mock_inworld_response):
+        """Test that helper uses Inworld by default."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            temp_file.write(b'fake wav data')
+            temp_file.flush()
+            audio_path = temp_file.name
+        
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        try:
+            with patch.object(service, '_clone_voice_with_inworld', return_value='inworld-voice-123') as mock_inworld:
+                with patch.object(service, '_clone_voice_with_cartesia') as mock_cartesia:
+                    with patch.object(service, '_update_user_profile_voice_id') as mock_update:
+                        result = service._clone_voice_and_update_profile(audio_path, 'user-456')
+                        
+                        mock_inworld.assert_called_once_with(audio_path, 'user-456')
+                        mock_cartesia.assert_not_called()
+                        mock_update.assert_called_once_with('user-456', 'inworld-voice-123')
+                        assert result == 'inworld-voice-123'
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+    
+    def test_uses_cartesia_when_specified(self, mock_supabase, mock_cartesia_client):
+        """Test that helper uses Cartesia when provider is set."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            temp_file.write(b'fake wav data')
+            temp_file.flush()
+            audio_path = temp_file.name
+        
+        service = VoiceCloningService(
+            mock_supabase,
+            voice_provider="cartesia",
+            cartesia_api_key="test-key"
+        )
+        
+        try:
+            with patch.object(service, '_clone_voice_with_inworld') as mock_inworld:
+                with patch.object(service, '_clone_voice_with_cartesia', return_value='cartesia-voice-123') as mock_cartesia:
+                    with patch.object(service, '_update_user_profile_voice_id') as mock_update:
+                        result = service._clone_voice_and_update_profile(audio_path, 'user-456')
+                        
+                        mock_cartesia.assert_called_once_with(audio_path, 'user-456')
+                        mock_inworld.assert_not_called()
+                        mock_update.assert_called_once_with('user-456', 'cartesia-voice-123')
+                        assert result == 'cartesia-voice-123'
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+    
+    def test_propagates_cloning_error(self, mock_supabase):
+        """Test that cloning errors are propagated."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            temp_file.write(b'fake wav data')
+            temp_file.flush()
+            audio_path = temp_file.name
+        
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        try:
+            with patch.object(service, '_clone_voice_with_inworld', side_effect=Exception("Cloning failed")):
+                with pytest.raises(Exception, match="Cloning failed"):
+                    service._clone_voice_and_update_profile(audio_path, 'user-456')
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+    
+    def test_propagates_profile_update_error(self, mock_supabase):
+        """Test that profile update errors are propagated."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            temp_file.write(b'fake wav data')
+            temp_file.flush()
+            audio_path = temp_file.name
+        
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        try:
+            with patch.object(service, '_clone_voice_with_inworld', return_value='voice-123'):
+                with patch.object(service, '_update_user_profile_voice_id', side_effect=Exception("DB Error")):
+                    with pytest.raises(Exception, match="DB Error"):
+                        service._clone_voice_and_update_profile(audio_path, 'user-456')
+        finally:
+            if os.path.exists(audio_path):
+                os.unlink(audio_path)
+
+
+class TestCloneVoiceFromAudioData:
+    """Test clone_voice_from_audio_data method."""
+    
+    def test_successful_recloning(self, mock_supabase):
+        """Test successful voice re-cloning from audio data."""
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        audio_data = b'fake wav audio data for cloning'
+        
+        with patch.object(service, '_clone_voice_and_update_profile', return_value='new-voice-id-789') as mock_clone:
+            result = service.clone_voice_from_audio_data('user-456', audio_data)
+            
+            assert result['status'] == 'success'
+            assert result['message'] == 'Voice re-cloned successfully'
+            assert result['user_id'] == 'user-456'
+            assert result['voice_id'] == 'new-voice-id-789'
+            
+            # Verify the helper was called with a temp file path
+            mock_clone.assert_called_once()
+            call_args = mock_clone.call_args[0]
+            assert call_args[1] == 'user-456'  # user_id
+            assert call_args[0].endswith('.wav')  # audio_path
+    
+    def test_missing_user_id(self, mock_supabase):
+        """Test error when user_id is missing."""
+        service = VoiceCloningService(mock_supabase)
+        
+        with pytest.raises(ValueError, match="user_id is required"):
+            service.clone_voice_from_audio_data(None, b'fake audio')
+    
+    def test_empty_user_id(self, mock_supabase):
+        """Test error when user_id is empty string."""
+        service = VoiceCloningService(mock_supabase)
+        
+        with pytest.raises(ValueError, match="user_id is required"):
+            service.clone_voice_from_audio_data('', b'fake audio')
+    
+    def test_missing_audio_data(self, mock_supabase):
+        """Test error when audio_data is None."""
+        service = VoiceCloningService(mock_supabase)
+        
+        with pytest.raises(ValueError, match="audio_data is required"):
+            service.clone_voice_from_audio_data('user-456', None)
+    
+    def test_empty_audio_data(self, mock_supabase):
+        """Test error when audio_data is empty."""
+        service = VoiceCloningService(mock_supabase)
+        
+        with pytest.raises(ValueError, match="audio_data is required"):
+            service.clone_voice_from_audio_data('user-456', b'')
+    
+    def test_no_supabase_client(self, mock_supabase):
+        """Test error when Supabase client is not initialized."""
+        service = VoiceCloningService(mock_supabase)
+        service.supabase = None
+        
+        with pytest.raises(Exception, match="Supabase client not initialized"):
+            service.clone_voice_from_audio_data('user-456', b'fake audio')
+    
+    def test_cloning_error_propagated(self, mock_supabase):
+        """Test that cloning errors are propagated properly."""
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        audio_data = b'fake wav audio data'
+        
+        with patch.object(service, '_clone_voice_and_update_profile', side_effect=Exception("API Error")):
+            with pytest.raises(Exception, match="API Error"):
+                service.clone_voice_from_audio_data('user-456', audio_data)
+    
+    def test_temp_file_cleanup_on_success(self, mock_supabase):
+        """Test that temp file is cleaned up after successful cloning."""
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        audio_data = b'fake wav audio data for cloning'
+        temp_path_captured = None
+        
+        def capture_path(audio_path, user_id):
+            nonlocal temp_path_captured
+            temp_path_captured = audio_path
+            return 'voice-id-123'
+        
+        with patch.object(service, '_clone_voice_and_update_profile', side_effect=capture_path):
+            service.clone_voice_from_audio_data('user-456', audio_data)
+        
+        # Temp file should be cleaned up
+        assert temp_path_captured is not None
+        assert not os.path.exists(temp_path_captured)
+    
+    def test_temp_file_cleanup_on_error(self, mock_supabase):
+        """Test that temp file is cleaned up even when cloning fails."""
+        service = VoiceCloningService(
+            mock_supabase,
+            inworld_api_key="test-key",
+            inworld_workspace_id="test-workspace"
+        )
+        
+        audio_data = b'fake wav audio data for cloning'
+        temp_path_captured = None
+        
+        def capture_path_and_fail(audio_path, user_id):
+            nonlocal temp_path_captured
+            temp_path_captured = audio_path
+            raise Exception("Cloning failed")
+        
+        with patch.object(service, '_clone_voice_and_update_profile', side_effect=capture_path_and_fail):
+            with pytest.raises(Exception):
+                service.clone_voice_from_audio_data('user-456', audio_data)
+        
+        # Temp file should still be cleaned up
+        assert temp_path_captured is not None
+        assert not os.path.exists(temp_path_captured)
 

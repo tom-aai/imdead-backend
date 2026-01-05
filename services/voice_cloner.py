@@ -6,6 +6,7 @@ import base64
 import os
 import logging
 import tempfile
+import time
 import torch
 import requests
 from pydub import AudioSegment
@@ -13,6 +14,13 @@ import numpy as np
 from cartesia import Cartesia
 
 logger = logging.getLogger(__name__)
+
+
+def _truncate_for_logging(text: str, max_length: int = 500) -> str:
+    """Truncate text for logging to avoid swamping logs with large payloads."""
+    if len(text) <= max_length:
+        return text
+    return f"{text[:max_length]}... [truncated, {len(text)} bytes total]"
 
 
 class VoiceCloningService:
@@ -51,12 +59,11 @@ class VoiceCloningService:
         Process voice recording for a given session.
         
         Process:
-        1. Look up recording_id from interview_calls table
+        1. Look up recording_id and user_id from interview_calls table
         2. Download recording from Supabase storage
         3. Process audio (silence removal, VAD)
-        4. Get user_id from interview_calls table
-        5. Clone voice with configured provider (Inworld or Cartesia)
-        6. Update user_profiles with voice_id
+        4. Clone voice with configured provider (Inworld or Cartesia)
+        5. Update user_profiles with voice_id
         
         Args:
             session_id: The LiveKit session ID
@@ -85,20 +92,22 @@ class VoiceCloningService:
         if not user_id:
             raise ValueError(f"No user_id found for session {session_id}")
         
-        logger.debug(f"Found recording_id: {recording_id}, call_type: {call_type}, user_id: {user_id}")
         
-        # Only clone voices for onboarding calls
-        if call_type != "onboarding":
-            logger.info(f"Skipping voice cloning for '{call_type}' call - only onboarding calls require voice cloning")
+        # Check if user already has a voice clone - only clone for first-time users
+        
+        existing_voice_id = self._get_existing_voice_id(user_id)
+        if existing_voice_id:
+            logger.info(f"Skipping voice cloning - user {user_id} already has a voice clone: {existing_voice_id}")
             return {
                 "status": "skipped",
-                "message": f"Voice cloning skipped for {call_type} call",
+                "message": "Voice cloning skipped - user already has a voice clone",
                 "session_id": session_id,
                 "recording_id": recording_id,
-                "call_type": call_type
+                "user_id": user_id,
+                "existing_voice_id": existing_voice_id
             }
         
-        logger.info(f"Processing voice cloning for onboarding call {session_id}")
+        logger.info(f"Processing voice cloning for session {session_id}")
         
         # Step 2: Download recording from Supabase storage
         local_recording_path = self._download_recording(recording_id, user_id)
@@ -110,25 +119,8 @@ class VoiceCloningService:
             
             logger.info(f"Voice recording processing completed for session {session_id}")
                         
-            # Step 4: Get user_id for voice cloning and profile update
-            user_id = self._get_user_id_from_session(session_id)
-            
-            if not user_id:
-                raise ValueError(f"No user_id found for session {session_id}")
-            
-            # Step 5: Clone voice with configured provider
-            if self.voice_provider == "cartesia":
-                voice_id = self._clone_voice_with_cartesia(processed_path, user_id)
-                logger.info(f"Voice cloned successfully with Cartesia. Voice ID: {voice_id}")
-            else:
-                # Default to Inworld
-                voice_id = self._clone_voice_with_inworld(processed_path, user_id)
-                logger.info(f"Voice cloned successfully with Inworld. Voice ID: {voice_id}")
-            
-            # Step 6: Update user_profiles table with voice_id
-            self._update_user_profile_voice_id(user_id, voice_id)
-            
-            logger.info(f"Updated user_profiles with voice_id for user {user_id}")
+            # Step 4: Clone voice and update profile
+            voice_id = self._clone_voice_and_update_profile(processed_path, user_id)
             
             return {
                 "status": "success",
@@ -140,21 +132,138 @@ class VoiceCloningService:
             }
             
         finally:
-            # Clean up temporary input file
-            if local_recording_path and os.path.exists(local_recording_path):
-                try:
-                    os.unlink(local_recording_path)
-                    logger.debug(f"Cleaned up temporary input file: {local_recording_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to clean up temporary file {local_recording_path}: {e}")
+            # Clean up temporary files
+            for path in [local_recording_path, processed_path]:
+                if path and os.path.exists(path):
+                    try:
+                        os.unlink(path)
+                    except:
+                        pass
+    
+    def clone_voice_from_audio_data(self, user_id: str, audio_data: bytes) -> dict:
+        """
+        Clone voice from raw audio data (e.g., from a re-clone recording).
+        
+        This method is used for the re-clone voice feature where users record
+        a dedicated voice sample. Unlike process_voice_recording(),
+        this method:
+        - Accepts raw audio bytes directly (no session/recording lookup)
+        - Auto-detects and converts WebM to WAV if needed
+        - Skips VAD processing (the sample is already clean)
+        - Always overwrites the existing voice_id
+        
+        Args:
+            user_id: The user's ID
+            audio_data: Raw audio bytes (WAV or WebM format)
             
-            # Clean up processed file
-            if processed_path and os.path.exists(processed_path):
+        Returns:
+            dict: Result with status and voice_id
+            
+        Raises:
+            ValueError: If user_id is missing or audio_data is empty
+            Exception: If cloning fails
+        """
+        if not user_id:
+            raise ValueError("user_id is required")
+        
+        if not audio_data or len(audio_data) == 0:
+            raise ValueError("audio_data is required and cannot be empty")
+        
+        if not self.supabase:
+            raise Exception("Supabase client not initialized")
+        
+        logger.info(f"Cloning voice for user {user_id} ({len(audio_data):,} bytes)")
+        
+        temp_audio_path = None
+        converted_path = None
+        
+        try:
+            # Detect audio format by magic bytes
+            is_webm = audio_data[:4] == b'\x1a\x45\xdf\xa3'  # WebM/Matroska magic bytes
+            is_wav = audio_data[:4] == b'RIFF' and audio_data[8:12] == b'WAVE'
+            
+            if is_webm:
+                # Save WebM to temp file and convert to WAV
+                temp_webm = tempfile.NamedTemporaryFile(delete=False, suffix='.webm')
+                temp_webm.write(audio_data)
+                temp_webm.close()
+                
                 try:
-                    os.unlink(processed_path)
-                    logger.debug(f"Cleaned up processed file: {processed_path}")
+                    audio = AudioSegment.from_file(temp_webm.name, format='webm')
+                    
+                    # Check if audio is silent
+                    if audio.dBFS < -50 or audio.dBFS == float('-inf'):
+                        raise ValueError("Recording appears to be silent. Please check your microphone.")
+                    
+                    logger.info(f"Audio: {len(audio)/1000:.1f}s, {audio.dBFS:.1f} dBFS")
+                    
+                    # Export as WAV (mono, 16-bit, 48kHz)
+                    audio = audio.set_channels(1).set_frame_rate(48000).set_sample_width(2)
+                    converted_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
+                    audio.export(converted_path, format='wav')
+                    temp_audio_path = converted_path
+                finally:
+                    try:
+                        os.unlink(temp_webm.name)
+                    except:
+                        pass
+                        
+            elif is_wav:
+                temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+                temp_audio_file.write(audio_data)
+                temp_audio_file.close()
+                temp_audio_path = temp_audio_file.name
+                
+                # Verify the audio has content
+                try:
+                    audio = AudioSegment.from_file(temp_audio_path, format='wav')
+                    if audio.dBFS < -50:
+                        logger.warning(f"Audio appears quiet: {audio.dBFS:.1f} dBFS")
+                    else:
+                        logger.info(f"Audio: {len(audio)/1000:.1f}s, {audio.dBFS:.1f} dBFS")
                 except Exception as e:
-                    logger.warning(f"Failed to clean up processed file {processed_path}: {e}")
+                    logger.warning(f"Could not analyze WAV: {e}")
+            else:
+                # Unknown format, try to let pydub figure it out
+                logger.warning(f"Unknown audio format, attempting conversion...")
+                temp_input = tempfile.NamedTemporaryFile(delete=False, suffix='.bin')
+                temp_input.write(audio_data)
+                temp_input.close()
+                
+                try:
+                    audio = AudioSegment.from_file(temp_input.name)
+                    audio = audio.set_channels(1).set_frame_rate(48000).set_sample_width(2)
+                    converted_path = tempfile.NamedTemporaryFile(delete=False, suffix='.wav').name
+                    audio.export(converted_path, format='wav')
+                    temp_audio_path = converted_path
+                    logger.info(f"Audio: {len(audio)/1000:.1f}s, {audio.dBFS:.1f} dBFS")
+                finally:
+                    try:
+                        os.unlink(temp_input.name)
+                    except:
+                        pass
+            
+            # Clone voice and update profile
+            voice_id = self._clone_voice_and_update_profile(temp_audio_path, user_id)
+            
+            return {
+                "status": "success",
+                "message": "Voice re-cloned successfully",
+                "user_id": user_id,
+                "voice_id": voice_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Voice cloning failed for user {user_id}: {e}")
+            raise
+            
+        finally:
+            # Clean up temp files
+            if temp_audio_path and os.path.exists(temp_audio_path):
+                try:
+                    os.unlink(temp_audio_path)
+                except:
+                    pass
     
     def _get_recording_info(self, session_id: str) -> tuple[str, str, str]:
         """
@@ -189,6 +298,44 @@ class VoiceCloningService:
         except Exception as e:
             logger.error(f"Failed to fetch recording info for session {session_id}: {e}")
             raise
+    
+    def _get_existing_voice_id(self, user_id: str) -> str | None:
+        """
+        Check if user already has a voice_id in user_profiles table.
+        
+        This returns None in three cases, all of which allow voice cloning to proceed:
+        1. User has no record in user_profiles (new user)
+        2. User has a record but voice_id is null/empty
+        3. Database query fails (we err on the side of cloning)
+        
+        Args:
+            user_id: The user's ID
+            
+        Returns:
+            str: The existing voice_id if found, None otherwise
+        """
+        try:
+            response = self.supabase.table("user_profiles")\
+                .select("voice_id")\
+                .eq("user_id", user_id)\
+                .limit(1)\
+                .execute()
+            
+            # Handle case where user has no profile record yet (new user)
+            # response.data will be an empty list [], which is falsy
+            if response.data and len(response.data) > 0:
+                voice_id = response.data[0].get('voice_id')
+                if voice_id:
+                    logger.debug(f"Found existing voice_id for user {user_id}: {voice_id}")
+                    return voice_id
+            
+            logger.debug(f"No existing voice_id found for user {user_id}")
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to check existing voice_id for user {user_id}: {e}")
+            # Return None to allow voice cloning to proceed if check fails
+            return None
     
     def _download_recording(self, recording_id: str, user_id: str) -> str:
         """
@@ -459,7 +606,6 @@ class VoiceCloningService:
             
             voice_name = user_id
             
-            logger.info(f"Cloning voice with Cartesia: '{voice_name}'")
             
             # Clone the voice using Cartesia SDK
             with open(audio_file_path, "rb") as file_handle:
@@ -475,132 +621,149 @@ class VoiceCloningService:
             # Extract voice ID from response (VoiceMetadata object)
             voice_id = response.id
             
-            logger.info(f"Voice cloned successfully. Voice ID: {voice_id}")
             return voice_id
             
         except Exception as e:
-            logger.error(f"Failed to clone voice with Cartesia: {e}")
-            raise Exception(f"Voice cloning failed: {e}")
+            raise Exception(f"Cartesia voice cloning failed: {e}")
     
-    def _clone_voice_with_inworld(self, audio_file_path: str, user_id: str) -> str:
+    def _clone_voice_with_inworld(
+        self,
+        audio_file_path: str,
+        user_id: str,
+        max_retries: int = 3,
+        base_delay: float = 60.0
+    ) -> str:
         """
-        Clone voice using Inworld API.
+        Clone voice using Inworld API with retry logic for rate limiting.
         
         Args:
             audio_file_path: Path to the processed audio file (WAV)
             user_id: The user's ID (used for naming the voice)
+            max_retries: Maximum number of retries for rate limit errors (default: 3)
+            base_delay: Base delay in seconds for exponential backoff (default: 60s)
             
         Returns:
             str: The voiceId from Inworld
             
         Raises:
-            Exception: If cloning fails
+            Exception: If cloning fails after all retries
         """
-        try:
-            if not os.path.exists(audio_file_path):
-                raise FileNotFoundError(f"Audio file not found at: {audio_file_path}")
-            
-            if not self.inworld_api_key:
-                raise ValueError("Inworld API key not configured")
-            
-            if not self.inworld_workspace_id:
-                raise ValueError("Inworld workspace ID not configured")
-            
-            voice_name = user_id
-            
-            logger.info(f"Cloning voice with Inworld: '{voice_name}'")
-            
-            # Read audio file and encode as base64
-            with open(audio_file_path, 'rb') as f:
-                audio_data = f.read()
-            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-            
-            logger.debug(f"Audio file size: {len(audio_data):,} bytes")
-            
-            # Format workspace path
-            workspace_id = self.inworld_workspace_id
-            if not workspace_id.startswith("workspaces/"):
-                workspace_path = f"workspaces/{workspace_id}"
-            else:
-                workspace_path = workspace_id
-            
-            url = f"https://api.inworld.ai/voices/v1/{workspace_path}/voices:clone"
-            
-            headers = {
-                "Authorization": f"Basic {self.inworld_api_key}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "displayName": voice_name,
-                "langCode": "EN_US",
-                "voiceSamples": [
-                    {
-                        "audioData": audio_base64
-                    }
-                ]
-            }
-            
-            logger.debug(f"Calling Inworld API: {url}")
-            
-            response = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=300  # Voice cloning can take a while
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"Inworld API error: {response.status_code} - {response.text}")
-                raise Exception(f"Inworld API returned status {response.status_code}: {response.text}")
-            
-            result = response.json()
-            
-            # Extract voice ID from response
-            voice = result.get("voice", {})
-            voice_id = voice.get("voiceId")
-            
-            if not voice_id:
-                raise Exception(f"No voiceId in Inworld response: {result}")
-            
-            logger.info(f"Voice cloned successfully with Inworld. Voice ID: {voice_id}")
-            return voice_id
-            
-        except Exception as e:
-            logger.error(f"Failed to clone voice with Inworld: {e}")
-            raise Exception(f"Voice cloning failed: {e}")
+        if not os.path.exists(audio_file_path):
+            raise FileNotFoundError(f"Audio file not found at: {audio_file_path}")
+        
+        if not self.inworld_api_key:
+            raise ValueError("Inworld API key not configured")
+        
+        if not self.inworld_workspace_id:
+            raise ValueError("Inworld workspace ID not configured")
+        
+        voice_name = user_id
+        
+        # Read audio file and encode as base64
+        with open(audio_file_path, 'rb') as f:
+            audio_data = f.read()
+        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+        
+        # Format workspace path
+        workspace_id = self.inworld_workspace_id
+        if not workspace_id.startswith("workspaces/"):
+            workspace_path = f"workspaces/{workspace_id}"
+        else:
+            workspace_path = workspace_id
+        
+        url = f"https://api.inworld.ai/voices/v1/{workspace_path}/voices:clone"
+        
+        headers = {
+            "Authorization": f"Basic {self.inworld_api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "displayName": voice_name,
+            "langCode": "EN_US",
+            "voiceSamples": [
+                {
+                    "audioData": audio_base64
+                }
+            ]
+        }
+        
+        last_error = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=300  # Voice cloning can take a while
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    
+                    # Extract voice ID from response
+                    voice = result.get("voice") or {}
+                    voice_id = voice.get("voiceId") if isinstance(voice, dict) else None
+                    
+                    if not voice_id:
+                        truncated_result = _truncate_for_logging(str(result))
+                        raise Exception(f"No voiceId in Inworld response: {truncated_result}")
+                    
+                    return voice_id
+                
+                # Handle rate limiting with exponential backoff
+                if response.status_code == 429:
+                    if attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(f"Rate limited, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries + 1})")
+                        time.sleep(delay)
+                        continue
+                    else:
+                        raise Exception(f"Inworld API rate limited after {max_retries + 1} attempts")
+                
+                # For other errors, don't retry
+                truncated_response = _truncate_for_logging(response.text)
+                raise Exception(f"Inworld API error {response.status_code}: {truncated_response}")
+                
+            except requests.exceptions.RequestException as e:
+                # Network/timeout errors - could retry but let's fail fast for now
+                logger.error(f"Inworld API request failed: {e}")
+                last_error = e
+                raise Exception(f"Voice cloning request failed: {e}")
+        
+        # Should not reach here, but just in case
+        raise Exception(f"Voice cloning failed after {max_retries + 1} attempts: {last_error}")
     
-    def _get_user_id_from_session(self, session_id: str) -> str:
+    def _clone_voice_and_update_profile(self, audio_path: str, user_id: str) -> str:
         """
-        Get user_id from interview_calls table.
+        Clone voice using the configured provider and update user profile.
+        
+        This helper method consolidates the cloning + profile update logic
+        used by both process_voice_recording() and clone_voice_from_audio_data().
         
         Args:
-            session_id: The LiveKit session ID
+            audio_path: Path to the audio file (WAV format)
+            user_id: The user's ID
             
         Returns:
-            str: user_id
+            str: The voice_id from the cloning provider
             
         Raises:
-            ValueError: If session not found
+            Exception: If cloning or profile update fails
         """
-        try:
-            response = self.supabase.table("interview_calls")\
-                .select("user_id")\
-                .eq("session_id", session_id)\
-                .limit(1)\
-                .execute()
-            
-            if not response.data or len(response.data) == 0:
-                raise ValueError(f"No call found for session_id: {session_id}")
-            
-            call_data = response.data[0]
-            user_id = call_data.get('user_id')
-            
-            return user_id
-            
-        except Exception as e:
-            logger.error(f"Failed to fetch user_id for session {session_id}: {e}")
-            raise
+        # Clone voice with configured provider
+        if self.voice_provider == "cartesia":
+            voice_id = self._clone_voice_with_cartesia(audio_path, user_id)
+        else:
+            voice_id = self._clone_voice_with_inworld(audio_path, user_id)
+        
+        # Update user_profiles table with voice_id
+        self._update_user_profile_voice_id(user_id, voice_id)
+        
+        logger.info(f"Voice cloned: {voice_id}")
+        
+        return voice_id
     
     def _update_user_profile_voice_id(self, user_id: str, voice_id: str) -> None:
         """
@@ -614,28 +777,20 @@ class VoiceCloningService:
             Exception: If update fails
         """
         try:
-            # Check if profile exists
             existing = self.supabase.table("user_profiles")\
                 .select("id")\
                 .eq("user_id", user_id)\
                 .execute()
             
             if existing.data and len(existing.data) > 0:
-                # Update existing profile
-                logger.debug(f"Updating voice_id for user {user_id}")
                 self.supabase.table("user_profiles")\
                     .update({"voice_id": voice_id})\
                     .eq("user_id", user_id)\
                     .execute()
             else:
-                # Create new profile with just the voice_id
-                logger.debug(f"Creating new profile with voice_id for user {user_id}")
                 self.supabase.table("user_profiles")\
                     .insert({"user_id": user_id, "voice_id": voice_id})\
                     .execute()
             
-            logger.debug(f"Successfully updated voice_id in user_profiles for user {user_id}")
-            
         except Exception as e:
-            logger.error(f"Failed to update user_profiles with voice_id: {e}")
             raise Exception(f"Database update failed: {e}")

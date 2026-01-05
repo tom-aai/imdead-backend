@@ -2,7 +2,7 @@
 Hot take video generation service.
 
 This service generates videos from hot takes:
-1. Generates audio from hot_take_x text using Cartesia
+1. Generates audio from hot_take_x text using TTS (Inworld or Cartesia)
 2. Uses the Hedra avatar to create a video with the audio
 3. Optionally adds captions using the CaptionGenerator service
 """
@@ -13,6 +13,7 @@ import tempfile
 import time
 import json
 import wave
+import base64
 from pathlib import Path
 from typing import List, Dict, Tuple
 import requests
@@ -46,7 +47,9 @@ class HotTakeVideoGenerationService:
     def __init__(
         self,
         supabase_client,
+        tts_provider: str = "inworld",
         cartesia_api_key: str = None,
+        inworld_api_key: str = None,
         hedra_api_key: str = None,
         output_dir: str = None
     ):
@@ -55,13 +58,22 @@ class HotTakeVideoGenerationService:
         
         Args:
             supabase_client: Initialized Supabase client
+            tts_provider: TTS provider to use ("inworld" or "cartesia", default: "inworld")
             cartesia_api_key: Cartesia API key (optional, will use env var if not provided)
+            inworld_api_key: Inworld API key (optional, will use env var if not provided)
             hedra_api_key: Hedra API key (optional, will use env var if not provided)
             output_dir: Directory to save generated videos (optional, defaults to temp dir)
         """
         self.supabase = supabase_client
+        self.tts_provider = tts_provider
+        
+        # Cartesia setup
         self.cartesia_api_key = cartesia_api_key or os.getenv("CARTESIA_API_KEY")
-        self.cartesia = Cartesia(api_key=self.cartesia_api_key)
+        self.cartesia = Cartesia(api_key=self.cartesia_api_key) if self.cartesia_api_key else None
+        
+        # Inworld setup
+        self.inworld_api_key = inworld_api_key or os.getenv("INWORLD_API_KEY")
+        
         self.hedra_api_key = hedra_api_key or os.getenv("HEDRA_API_KEY")
         self.output_dir = output_dir or tempfile.gettempdir()
         
@@ -147,14 +159,21 @@ class HotTakeVideoGenerationService:
         
         os.makedirs(output_dir, exist_ok=True)
         
-        # Step 4: Generate audio from hot_take text using Cartesia (with word timestamps)
-        temp_audio_path, word_timestamps = self._generate_audio_with_cartesia(
-            hot_take_text,
-            voice_id,
-            session_id
-        )
+        # Step 4: Generate audio from hot_take text using configured TTS provider (with word timestamps)
+        if self.tts_provider == "cartesia":
+            temp_audio_path, word_timestamps = self._generate_audio_with_cartesia(
+                hot_take_text,
+                voice_id,
+                session_id
+            )
+        else:
+            temp_audio_path, word_timestamps = self._generate_audio_with_inworld(
+                hot_take_text,
+                voice_id,
+                session_id
+            )
         
-        logger.info(f"Audio generated for hot take")
+        logger.info(f"Audio generated for hot take using {self.tts_provider}")
         
         # Step 5: Generate video using Hedra
         temp_video_path = self._generate_video_with_hedra(
@@ -540,6 +559,108 @@ class HotTakeVideoGenerationService:
             
         except Exception as e:
             logger.error(f"Failed to generate audio with Cartesia: {e}")
+            raise Exception(f"Audio generation failed: {e}")
+    
+    def _generate_audio_with_inworld(
+        self,
+        text: str,
+        voice_id: str,
+        session_id: str
+    ) -> Tuple[str, List[Dict]]:
+        """
+        Generate audio from text using Inworld TTS with word timestamps.
+        
+        Args:
+            text: The text to convert to speech
+            voice_id: The Inworld voice ID to use (cloned voice ID)
+            session_id: Session ID for naming the output file
+            
+        Returns:
+            Tuple[str, List[Dict]]: (audio_file_path, word_timestamps)
+            
+        Raises:
+            Exception: If audio generation fails
+        """
+        try:
+            logger.info(f"Generating audio with Inworld TTS (voice: {voice_id})")
+            
+            if not self.inworld_api_key:
+                raise ValueError("Inworld API key not configured")
+            
+            # Prepare request to Inworld sync TTS endpoint
+            url = "https://api.inworld.ai/tts/v1/voice"
+            headers = {
+                "Authorization": f"Basic {self.inworld_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "text": text,
+                "voiceId": voice_id,
+                "modelId": "inworld-tts-1-max",
+                "audioConfig": {
+                    "audioEncoding": "LINEAR16",
+                    "sampleRateHertz": 44100,
+                    "speakingRate": 0.85  # Slower speech (85% of normal speed)
+                },
+                "temperature": 1.1,
+                "timestampType": "WORD"
+            }
+            
+            # Make sync request
+            response = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=300  # TTS can take a while for long text
+            )
+            
+            if not response.ok:
+                raise Exception(f"Inworld API error: {response.status_code} {response.text}")
+            
+            result = response.json()
+            
+            # Extract audio content (base64 encoded)
+            audio_content_b64 = result.get("audioContent")
+            if not audio_content_b64:
+                raise Exception("No audio content in Inworld response")
+            
+            # Decode audio
+            audio_bytes = base64.b64decode(audio_content_b64)
+            
+            # Extract word timestamps
+            word_timestamps = []
+            timestamp_info = result.get("timestampInfo", {})
+            word_alignment = timestamp_info.get("wordAlignment", {})
+            
+            if word_alignment:
+                words = word_alignment.get("words", [])
+                starts = word_alignment.get("wordStartTimeSeconds", [])
+                ends = word_alignment.get("wordEndTimeSeconds", [])
+                
+                for i in range(len(words)):
+                    word_timestamps.append({
+                        'word': words[i],
+                        'start': starts[i] if i < len(starts) else 0,
+                        'end': ends[i] if i < len(ends) else 0
+                    })
+            
+            logger.debug(f"Received {len(audio_bytes)} bytes of audio and {len(word_timestamps)} word timestamps")
+            
+            # Save audio to file
+            # Inworld returns LINEAR16 with WAV header, so we can save directly
+            output_filename = f"hot_take_audio_{session_id}.wav"
+            output_path = os.path.join(os.getcwd(), output_filename)
+            
+            with open(output_path, 'wb') as f:
+                f.write(audio_bytes)
+            
+            logger.debug(f"Audio saved to {output_path}")
+            
+            return output_path, word_timestamps
+            
+        except Exception as e:
+            logger.error(f"Failed to generate audio with Inworld: {e}")
             raise Exception(f"Audio generation failed: {e}")
     
     def _generate_video_with_hedra(

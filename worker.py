@@ -23,6 +23,7 @@ from supabase import create_client, Client
 # Import services
 from services.post_call_orchestrator import PostCallOrchestrator
 from services.hot_take_video_generator import HotTakeVideoGenerationService
+from services.voice_cloner import VoiceCloningService
 
 # Load environment variables: prefer .env.local, fallback to default .env if present
 _loaded = load_dotenv(".env.local")
@@ -39,6 +40,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress verbose HTTP library logging that can swamp logs with large payloads
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # Use service key for worker
@@ -48,6 +54,7 @@ CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 INWORLD_API_KEY = os.getenv("INWORLD_API_KEY")
 INWORLD_WORKSPACE_ID = os.getenv("INWORLD_WORKSPACE_ID")
+VOICE_PROVIDER = os.getenv("VOICE_PROVIDER", "inworld")
 
 POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", "5"))  # seconds
 STUCK_JOB_TIMEOUT = int(os.getenv("STUCK_JOB_TIMEOUT", "30"))  # minutes
@@ -75,8 +82,17 @@ class JobWorker:
         )
         self.hot_take_service = HotTakeVideoGenerationService(
             supabase_client=self.supabase,
+            tts_provider=VOICE_PROVIDER,
             cartesia_api_key=CARTESIA_API_KEY,
+            inworld_api_key=INWORLD_API_KEY,
             hedra_api_key=HEDRA_API_KEY
+        )
+        self.voice_cloning_service = VoiceCloningService(
+            supabase_client=self.supabase,
+            voice_provider=VOICE_PROVIDER,
+            cartesia_api_key=CARTESIA_API_KEY,
+            inworld_api_key=INWORLD_API_KEY,
+            inworld_workspace_id=INWORLD_WORKSPACE_ID
         )
         self.worker_id = os.getenv('RENDER_INSTANCE_ID', f'worker-{os.getpid()}')
         logger.info(f"Worker initialized with ID: {self.worker_id}")
@@ -116,6 +132,32 @@ class JobWorker:
                     user_id=user_id,
                     picture_id=picture_id
                 ))
+            elif job_type == 'voice_reclone':
+                # Voice re-clone from uploaded audio
+                user_id = job_data.get('user_id')
+                audio_path = job_data.get('audio_path')
+                
+                if not user_id or not audio_path:
+                    raise ValueError("voice_reclone job requires user_id and audio_path in job_data")
+                
+                # Download audio from Supabase storage
+                audio_data = self.supabase.storage.from_("voice-clone-audio").download(audio_path)
+                
+                if not audio_data:
+                    raise Exception(f"Failed to download audio from {audio_path}")
+                
+                # Clone voice
+                result = self.voice_cloning_service.clone_voice_from_audio_data(
+                    user_id=user_id,
+                    audio_data=audio_data
+                )
+                
+                # Clean up: delete audio from storage after successful cloning
+                try:
+                    self.supabase.storage.from_("voice-clone-audio").remove([audio_path])
+                    logger.debug(f"Cleaned up voice clone audio: {audio_path}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up audio file {audio_path}: {cleanup_error}")
             else:
                 # Default: post-call orchestration
                 result = asyncio.run(self.orchestrator.process_call_completion(session_id))

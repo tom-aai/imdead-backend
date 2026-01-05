@@ -95,9 +95,16 @@ def main():
     
     supabase = create_client(supabase_url, supabase_key)
     
+    # Get TTS provider from environment (default to inworld)
+    tts_provider = os.getenv("VOICE_PROVIDER", "inworld")
+    
     # Initialize the service
     service = HotTakeVideoGenerationService(
-        supabase_client=supabase
+        supabase_client=supabase,
+        tts_provider=tts_provider,
+        cartesia_api_key=os.getenv("CARTESIA_API_KEY"),
+        inworld_api_key=os.getenv("INWORLD_API_KEY"),
+        hedra_api_key=os.getenv("HEDRA_API_KEY")
     )
     
     try:

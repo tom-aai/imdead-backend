@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 
 from services.hedra_avatar_id_generator import HedraAvatarGenerator
+from services.voice_cloner import VoiceCloningService
 
 # Load environment variables: prefer .env.local, fallback to default .env if present
 _loaded = load_dotenv(".env.local")
@@ -54,6 +55,9 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 HEDRA_API_KEY = os.getenv("HEDRA_API_KEY")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
+INWORLD_API_KEY = os.getenv("INWORLD_API_KEY")
+INWORLD_WORKSPACE_ID = os.getenv("INWORLD_WORKSPACE_ID")
+VOICE_PROVIDER = os.getenv("VOICE_PROVIDER", "inworld")
 
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_SERVICE_KEY:
@@ -73,6 +77,13 @@ if not CARTESIA_API_KEY:
 
 # Initialize services
 hedra_avatar_generator = HedraAvatarGenerator(supabase, HEDRA_API_KEY)
+voice_cloning_service = VoiceCloningService(
+	supabase,
+	voice_provider=VOICE_PROVIDER,
+	cartesia_api_key=CARTESIA_API_KEY,
+	inworld_api_key=INWORLD_API_KEY,
+	inworld_workspace_id=INWORLD_WORKSPACE_ID
+)
 
 
 @app.route("/")
@@ -546,6 +557,159 @@ def get_hot_take_job_status(job_id: str):
 		
 	except Exception as e:
 		logger.error(f"Error fetching hot take job status: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/reclone-voice", methods=["POST"])
+def reclone_voice_endpoint():
+	"""
+	Re-clone a user's voice from a new audio recording.
+	
+	This endpoint is authenticated via Supabase JWT token (user auth).
+	It accepts an audio file (WAV format), uploads it to Supabase storage,
+	and enqueues a job for async processing by the worker.
+	
+	Request:
+		- Content-Type: multipart/form-data
+		- audio: The audio file (WAV format, ~10 seconds)
+	
+	Returns:
+		- status: "queued"
+		- job_id: UUID of the enqueued job for status polling
+	"""
+	try:
+		# Verify user authentication via Supabase JWT
+		auth_header = request.headers.get('Authorization')
+		user = _verify_supabase_user(auth_header)
+		
+		if not user:
+			return jsonify({"error": "Unauthorized"}), 401
+		
+		user_id = user["id"]
+		
+		# Get the audio file from the request
+		if 'audio' not in request.files:
+			return jsonify({"error": "audio file is required"}), 400
+		
+		audio_file = request.files['audio']
+		
+		if audio_file.filename == '':
+			return jsonify({"error": "No audio file selected"}), 400
+		
+		# Read audio data
+		audio_data = audio_file.read()
+		
+		if len(audio_data) == 0:
+			return jsonify({"error": "Audio file is empty"}), 400
+		
+		logger.info(f"Received voice re-clone request from user {user_id} ({len(audio_data):,} bytes)")
+		
+		# Upload audio to Supabase storage
+		audio_id = str(uuid.uuid4())
+		storage_path = f"{user_id}/{audio_id}.wav"
+		
+		supabase.storage.from_("voice-clone-audio").upload(
+			storage_path,
+			audio_data,
+			file_options={"content-type": "audio/wav"}
+		)
+		
+		logger.info(f"Uploaded voice clone audio to storage: {storage_path}")
+		
+		# Enqueue voice_reclone job
+		job_record = {
+			"session_id": audio_id,  # Use audio_id as session_id for this job type
+			"job_type": "voice_reclone",
+			"job_data": {
+				"user_id": user_id,
+				"audio_path": storage_path
+			},
+			"status": "pending",
+			"attempts": 0,
+			"max_attempts": 3
+		}
+		
+		job_response = supabase.table("post_call_jobs").insert(job_record).execute()
+		
+		if not job_response.data:
+			raise Exception("Failed to enqueue voice reclone job")
+		
+		job_id = job_response.data[0].get('id')
+		
+		logger.info(f"Voice reclone job enqueued for user {user_id} (job_id: {job_id})")
+		
+		return jsonify({
+			"status": "queued",
+			"message": "Voice re-clone job enqueued",
+			"job_id": job_id
+		}), 202
+		
+	except ValueError as e:
+		logger.warning(f"Invalid request for voice re-clone: {e}")
+		return jsonify({"error": str(e)}), 400
+		
+	except Exception as e:
+		logger.error(f"Error enqueuing voice re-clone: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/reclone-voice-jobs/<job_id>", methods=["GET"])
+def get_reclone_voice_job_status(job_id: str):
+	"""
+	Get the status of a voice re-clone job.
+	
+	Authenticated via Supabase JWT token.
+	
+	Args:
+		job_id: UUID of the job
+		
+	Returns:
+		Job status information including current state and result/error
+	"""
+	try:
+		# Verify user authentication via Supabase JWT
+		auth_header = request.headers.get('Authorization')
+		user = _verify_supabase_user(auth_header)
+		
+		if not user:
+			return jsonify({"error": "Unauthorized"}), 401
+		
+		user_id = user["id"]
+		
+		# Fetch the job
+		response = supabase.table("post_call_jobs")\
+			.select("*")\
+			.eq("id", job_id)\
+			.eq("job_type", "voice_reclone")\
+			.limit(1)\
+			.execute()
+		
+		if not response.data or len(response.data) == 0:
+			return jsonify({"error": "Job not found"}), 404
+		
+		job = response.data[0]
+		job_data = job.get("job_data") or {}
+		
+		# Verify job belongs to this user
+		job_user_id = job_data.get("user_id")
+		if job_user_id != user_id:
+			return jsonify({"error": "Unauthorized - job belongs to another user"}), 403
+		
+		return jsonify({
+			"job_id": job['id'],
+			"job_type": job.get('job_type'),
+			"status": job['status'],
+			"attempts": job['attempts'],
+			"max_attempts": job['max_attempts'],
+			"error": job.get('error'),
+			"result": job.get('result'),
+			"created_at": job['created_at'],
+			"started_at": job.get('started_at'),
+			"completed_at": job.get('completed_at')
+		}), 200
+		
+	except Exception as e:
+		logger.error(f"Error fetching voice reclone job status: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
 

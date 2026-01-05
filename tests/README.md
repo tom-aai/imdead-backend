@@ -72,16 +72,16 @@ uv run pytest tests/unit/test_hedra_avatar_generator.py -v
 ```
 
 ### VoiceCloningService (18 tests, ~80% coverage)
-Tests the service that processes voice recordings and clones voices using Cartesia.
+Tests the service that processes voice recordings and clones voices using Inworld or Cartesia.
 
 **What it tests:**
-- Call type filtering (only processes onboarding calls, skips interviews)
+- First-time user voice cloning (skips users with existing voice_id)
 - Recording download from `interview-recordings` bucket
 - Audio processing with Silero VAD (Voice Activity Detection)
 - Speech segment extraction and stitching
-- Cartesia voice cloning API integration
+- Inworld and Cartesia voice cloning API integration
 - User profile creation/update with `voice_id`
-- Error handling (missing recordings, API failures, invalid call types)
+- Error handling (missing recordings, API failures)
 
 **Run it:**
 ```bash
