@@ -53,7 +53,7 @@ class TestProcessTranscript:
         
         processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
         
-        # Mock the LLM processing (no conversation_narrative - it comes from raw data now)
+        # Mock the LLM processing (includes conversation_summary for the summary)
         with patch.object(processor, '_process_with_llm') as mock_llm:
             mock_llm.return_value = {
                 'session_id': sample_call_data['session_id'],
@@ -65,6 +65,7 @@ class TestProcessTranscript:
                 'myers_briggs_code': 'INTJ',
                 'personality': 'Analytical',
                 'expertise_description': 'AI Expert',
+                'conversation_summary': 'The user discussed AI topics in depth.',
                 'hot_take_1': 'AI will change everything'
             }
             
@@ -422,6 +423,29 @@ class TestProcessWithLLM:
                 call_kwargs = mock_create.call_args.kwargs
                 assert call_kwargs['model'] == 'claude-3-5-haiku-20241022'
                 assert call_kwargs['max_tokens'] == 4096
+    
+    def test_llm_processing_returns_conversation_summary(self, mock_supabase):
+        """Test that LLM output includes conversation_summary field."""
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        
+        # Mock Claude response with conversation_summary
+        mock_content = MagicMock()
+        mock_content.text = json.dumps({
+            'session_id': 'test-123',
+            'main_topic': 'AI',
+            'conversation_summary': 'The user discussed their expertise in artificial intelligence. They explained their background in machine learning and their current focus on healthcare AI applications.',
+            'hot_take_1': 'AI is transformative'
+        })
+        
+        mock_message = MagicMock()
+        mock_message.content = [mock_content]
+        
+        with patch.object(processor.anthropic.messages, 'create', return_value=mock_message):
+            result = processor._process_with_llm('metadata', 'transcript')
+            
+            assert 'conversation_summary' in result
+            assert 'The user discussed' in result['conversation_summary']
+            assert result['session_id'] == 'test-123'
 
 
 class TestUploadToSupabase:
@@ -472,7 +496,7 @@ class TestUploadToSupabase:
         # Verify all expected fields
         expected_fields = [
             'session_id', 'user_id', 'user_firstname', 'user_lastname', 'created_at',
-            'main_topic', 'conversation_narrative', 'myers_briggs_code', 'personality',
+            'main_topic', 'transcript', 'conversation_summary', 'myers_briggs_code', 'personality',
             'expertise_description', 'hot_take_1',
             'hedra_avatar_id', 'hot_take_video_1'
         ]
@@ -480,8 +504,8 @@ class TestUploadToSupabase:
         for field in expected_fields:
             assert field in upload_data
     
-    def test_upload_stores_filtered_conversation_as_json(self, mock_supabase, sample_analysis_data, sample_call_data):
-        """Test that conversation_narrative contains filtered conversation JSON."""
+    def test_upload_stores_filtered_conversation_in_transcript(self, mock_supabase, sample_analysis_data, sample_call_data):
+        """Test that transcript contains filtered conversation JSON."""
         mock_supabase.table.return_value.upsert.return_value.execute.return_value.data = [{'id': '123'}]
         
         # Add message type to sample_call_data items for filtering
@@ -510,9 +534,9 @@ class TestUploadToSupabase:
         
         upload_data = mock_supabase.table.return_value.upsert.call_args.args[0]
         
-        # conversation_narrative should be a JSON string
+        # transcript should be a JSON string containing filtered conversation
         import json
-        conversation = json.loads(upload_data['conversation_narrative'])
+        conversation = json.loads(upload_data['transcript'])
         
         # Should have filtered items
         assert 'items' in conversation
@@ -527,4 +551,326 @@ class TestUploadToSupabase:
         assert conversation['items'][0]['role'] == 'assistant'
         assert conversation['items'][1]['role'] == 'user'
         assert conversation['items'][1]['transcript_confidence'] == 0.9
+    
+    def test_upload_stores_summary_in_conversation_summary(self, mock_supabase, sample_analysis_data, sample_call_data):
+        """Test that conversation_summary contains the LLM-generated summary."""
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value.data = [{'id': '123'}]
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        processor._upload_to_supabase(sample_analysis_data, sample_call_data)
+        
+        upload_data = mock_supabase.table.return_value.upsert.call_args.args[0]
+        
+        # conversation_summary should contain the summary from analysis_data
+        assert upload_data['conversation_summary'] == sample_analysis_data['conversation_summary']
+        # It should be a plain string, not JSON
+        assert 'The user discussed' in upload_data['conversation_summary']
+
+
+class TestAppendToTranscript:
+    """Test append_to_transcript method for resume sessions."""
+    
+    def test_successful_append(self, mock_supabase):
+        """Test successfully appending new conversation to existing session."""
+        # Mock original session with existing transcript
+        original_transcript = {
+            "items": [
+                {"role": "assistant", "content": ["Hello!"], "interrupted": False},
+                {"role": "user", "content": ["Hi there!"], "transcript_confidence": 0.95}
+            ]
+        }
+        mock_original_response = MagicMock()
+        mock_original_response.data = [{
+            "session_id": "original-session-123",
+            "transcript": json.dumps(original_transcript),
+            "user_id": "user-456"
+        }]
+        
+        # Mock new session with new conversation
+        new_conversation = {
+            "items": [
+                {
+                    "id": "item-new-1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": ["Welcome back!"],
+                    "metrics": {"llm_node_ttft": 0.3}
+                },
+                {
+                    "id": "item-new-2",
+                    "type": "message",
+                    "role": "user",
+                    "content": ["Thanks!"],
+                    "transcript_confidence": 0.92
+                }
+            ]
+        }
+        mock_new_response = MagicMock()
+        mock_new_response.data = [{
+            "session_id": "new-session-789",
+            "user_id": "user-456",
+            "conversation": new_conversation
+        }]
+        
+        # Mock update response
+        mock_update_response = MagicMock()
+        mock_update_response.data = [{"session_id": "original-session-123"}]
+        
+        # Configure mock chain
+        def select_side_effect(columns):
+            mock_select = MagicMock()
+            mock_eq = MagicMock()
+            if "transcript" in columns:
+                mock_eq.execute.return_value = mock_original_response
+            else:
+                mock_eq.execute.return_value = mock_new_response
+            mock_select.eq.return_value = mock_eq
+            return mock_select
+        
+        mock_table = MagicMock()
+        mock_table.select.side_effect = select_side_effect
+        mock_table.update.return_value.eq.return_value.execute.return_value = mock_update_response
+        mock_supabase.table.return_value = mock_table
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        result = processor.append_to_transcript(
+            original_session_id="original-session-123",
+            new_session_id="new-session-789"
+        )
+        
+        assert result["status"] == "success"
+        assert result["original_session_id"] == "original-session-123"
+        assert result["new_session_id"] == "new-session-789"
+        assert result["items_appended"] == 2  # Two message items from new session
+        assert result["total_items"] == 4  # 2 original + 2 new
+    
+    def test_original_session_not_found(self, mock_supabase):
+        """Test error when original session is not found."""
+        mock_response = MagicMock()
+        mock_response.data = []
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mock_response
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        
+        with pytest.raises(ValueError, match="Original session not found"):
+            processor.append_to_transcript(
+                original_session_id="nonexistent-session",
+                new_session_id="new-session-789"
+            )
+    
+    def test_new_session_not_found(self, mock_supabase):
+        """Test error when new session is not found."""
+        # Mock original session exists
+        mock_original_response = MagicMock()
+        mock_original_response.data = [{
+            "session_id": "original-session-123",
+            "transcript": json.dumps({"items": []}),
+            "user_id": "user-456"
+        }]
+        
+        # Mock new session doesn't exist
+        mock_new_response = MagicMock()
+        mock_new_response.data = []
+        
+        # Configure mock chain
+        def select_side_effect(columns):
+            mock_select = MagicMock()
+            mock_eq = MagicMock()
+            if "transcript" in columns:
+                mock_eq.execute.return_value = mock_original_response
+            else:
+                mock_eq.execute.return_value = mock_new_response
+            mock_select.eq.return_value = mock_eq
+            return mock_select
+        
+        mock_supabase.table.return_value.select.side_effect = select_side_effect
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        
+        with pytest.raises(ValueError, match="New session not found"):
+            processor.append_to_transcript(
+                original_session_id="original-session-123",
+                new_session_id="nonexistent-session"
+            )
+    
+    def test_user_mismatch_raises_error(self, mock_supabase):
+        """Test error when sessions belong to different users."""
+        # Mock original session with user-1
+        mock_original_response = MagicMock()
+        mock_original_response.data = [{
+            "session_id": "original-session-123",
+            "transcript": json.dumps({"items": []}),
+            "user_id": "user-1"
+        }]
+        
+        # Mock new session with different user-2
+        mock_new_response = MagicMock()
+        mock_new_response.data = [{
+            "session_id": "new-session-789",
+            "user_id": "user-2",  # Different user!
+            "conversation": {"items": []}
+        }]
+        
+        # Configure mock chain
+        def select_side_effect(columns):
+            mock_select = MagicMock()
+            mock_eq = MagicMock()
+            if "transcript" in columns:
+                mock_eq.execute.return_value = mock_original_response
+            else:
+                mock_eq.execute.return_value = mock_new_response
+            mock_select.eq.return_value = mock_eq
+            return mock_select
+        
+        mock_supabase.table.return_value.select.side_effect = select_side_effect
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        
+        with pytest.raises(ValueError, match="Session ownership mismatch"):
+            processor.append_to_transcript(
+                original_session_id="original-session-123",
+                new_session_id="new-session-789"
+            )
+    
+    def test_filters_new_conversation_items(self, mock_supabase):
+        """Test that new conversation items are filtered before appending."""
+        # Mock original session
+        mock_original_response = MagicMock()
+        mock_original_response.data = [{
+            "session_id": "original-session-123",
+            "transcript": json.dumps({"items": []}),
+            "user_id": "user-456"
+        }]
+        
+        # Mock new session with items that should be filtered
+        new_conversation = {
+            "items": [
+                {
+                    "id": "item-1",  # Should be removed
+                    "type": "message",
+                    "role": "assistant",
+                    "content": ["Hello again!"],
+                    "metrics": {"llm_node_ttft": 0.3},  # Should be removed
+                    "extra": {},  # Should be removed
+                    "interrupted": True
+                },
+                {
+                    "id": "item-2",  # Should be removed
+                    "type": "agent_handoff",  # Non-message type - should be skipped entirely
+                    "new_agent_id": "interview_agent"
+                }
+            ]
+        }
+        mock_new_response = MagicMock()
+        mock_new_response.data = [{
+            "session_id": "new-session-789",
+            "user_id": "user-456",
+            "conversation": new_conversation
+        }]
+        
+        # Mock update to capture the merged transcript
+        mock_update_response = MagicMock()
+        mock_update_response.data = [{"session_id": "original-session-123"}]
+        
+        # Configure mock chain
+        def select_side_effect(columns):
+            mock_select = MagicMock()
+            mock_eq = MagicMock()
+            if "transcript" in columns:
+                mock_eq.execute.return_value = mock_original_response
+            else:
+                mock_eq.execute.return_value = mock_new_response
+            mock_select.eq.return_value = mock_eq
+            return mock_select
+        
+        mock_table = MagicMock()
+        mock_table.select.side_effect = select_side_effect
+        mock_table.update.return_value.eq.return_value.execute.return_value = mock_update_response
+        mock_supabase.table.return_value = mock_table
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        result = processor.append_to_transcript(
+            original_session_id="original-session-123",
+            new_session_id="new-session-789"
+        )
+        
+        # Only 1 item should be appended (the message, not the agent_handoff)
+        assert result["items_appended"] == 1
+        
+        # Verify update was called with filtered content
+        # Note: There are two update calls - one for transcript, one for resumed_from
+        # Get the first one which contains the transcript update
+        update_calls = mock_table.update.call_args_list
+        transcript_update_call = update_calls[0]  # First update is the transcript
+        update_args = transcript_update_call[0][0]  # First positional arg
+        updated_transcript = json.loads(update_args["transcript"])
+        
+        # Should only have 1 item (the message, not agent_handoff)
+        assert len(updated_transcript["items"]) == 1
+        
+        # Filtered item should not have id, metrics, extra
+        filtered_item = updated_transcript["items"][0]
+        assert "id" not in filtered_item
+        assert "metrics" not in filtered_item
+        assert "extra" not in filtered_item
+        assert "type" not in filtered_item
+        
+        # Should have essential fields
+        assert filtered_item["role"] == "assistant"
+        assert filtered_item["content"] == ["Hello again!"]
+        assert filtered_item["interrupted"] == True
+    
+    def test_handles_empty_original_transcript(self, mock_supabase):
+        """Test appending when original transcript is empty or missing."""
+        # Mock original session with empty/null transcript
+        mock_original_response = MagicMock()
+        mock_original_response.data = [{
+            "session_id": "original-session-123",
+            "transcript": None,  # Empty transcript
+            "user_id": "user-456"
+        }]
+        
+        # Mock new session
+        new_conversation = {
+            "items": [
+                {"type": "message", "role": "user", "content": ["First message!"]}
+            ]
+        }
+        mock_new_response = MagicMock()
+        mock_new_response.data = [{
+            "session_id": "new-session-789",
+            "user_id": "user-456",
+            "conversation": new_conversation
+        }]
+        
+        mock_update_response = MagicMock()
+        mock_update_response.data = [{"session_id": "original-session-123"}]
+        
+        # Configure mock chain
+        def select_side_effect(columns):
+            mock_select = MagicMock()
+            mock_eq = MagicMock()
+            if "transcript" in columns:
+                mock_eq.execute.return_value = mock_original_response
+            else:
+                mock_eq.execute.return_value = mock_new_response
+            mock_select.eq.return_value = mock_eq
+            return mock_select
+        
+        mock_table = MagicMock()
+        mock_table.select.side_effect = select_side_effect
+        mock_table.update.return_value.eq.return_value.execute.return_value = mock_update_response
+        mock_supabase.table.return_value = mock_table
+        
+        processor = TranscriptProcessor(mock_supabase, anthropic_api_key="test-key")
+        result = processor.append_to_transcript(
+            original_session_id="original-session-123",
+            new_session_id="new-session-789"
+        )
+        
+        # Should work even with empty original
+        assert result["status"] == "success"
+        assert result["items_appended"] == 1
+        assert result["total_items"] == 1
+    
 

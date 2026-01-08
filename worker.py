@@ -24,6 +24,7 @@ from supabase import create_client, Client
 from services.post_call_orchestrator import PostCallOrchestrator
 from services.hot_take_video_generator import HotTakeVideoGenerationService
 from services.voice_cloner import VoiceCloningService
+from services.transcript_processor import TranscriptProcessor
 
 # Load environment variables: prefer .env.local, fallback to default .env if present
 _loaded = load_dotenv(".env.local")
@@ -94,6 +95,10 @@ class JobWorker:
             inworld_api_key=INWORLD_API_KEY,
             inworld_workspace_id=INWORLD_WORKSPACE_ID
         )
+        self.transcript_processor = TranscriptProcessor(
+            supabase_client=self.supabase,
+            anthropic_api_key=ANTHROPIC_API_KEY
+        )
         self.worker_id = os.getenv('RENDER_INSTANCE_ID', f'worker-{os.getpid()}')
         logger.info(f"Worker initialized with ID: {self.worker_id}")
     
@@ -158,6 +163,17 @@ class JobWorker:
                     logger.debug(f"Cleaned up voice clone audio: {audio_path}")
                 except Exception as cleanup_error:
                     logger.warning(f"Failed to clean up audio file {audio_path}: {cleanup_error}")
+            elif job_type == 'resume_session':
+                # Resume session - append new conversation to existing session
+                original_session_id = job_data.get('original_session_id')
+                
+                if not original_session_id:
+                    raise ValueError("resume_session job requires original_session_id in job_data")
+                
+                result = self.transcript_processor.append_to_transcript(
+                    original_session_id=original_session_id,
+                    new_session_id=session_id
+                )
             else:
                 # Default: post-call orchestration
                 result = asyncio.run(self.orchestrator.process_call_completion(session_id))

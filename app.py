@@ -148,6 +148,68 @@ def post_call_orchestrator_endpoint():
 		return jsonify({"error": str(e)}), 500
 
 
+@app.route("/resume-session-orchestrator", methods=["POST"])
+@require_api_key
+def resume_session_orchestrator_endpoint():
+	"""
+	Process a resumed session by appending the new conversation to the original session.
+	Called by the LiveKit agent after saving the transcript for a resumed session.
+	
+	This enqueues a job in the post_call_jobs table with job_type='resume_session'.
+	A background worker will pick up and process the job asynchronously.
+	
+	Required fields:
+	- session_id: The new LiveKit session ID (where the resumed conversation is stored)
+	- original_session_id: The original session ID to append the conversation to
+	"""
+	try:
+		# Get data from request
+		data = request.get_json()
+		session_id = data.get("session_id")
+		original_session_id = data.get("original_session_id")
+		
+		if not session_id:
+			return jsonify({"error": "session_id is required"}), 400
+		
+		if not original_session_id:
+			return jsonify({"error": "original_session_id is required"}), 400
+		
+		# Enqueue job in Supabase with job_type='resume_session'
+		job_data = {
+			"session_id": session_id,
+			"job_type": "resume_session",
+			"job_data": {
+				"original_session_id": original_session_id
+			},
+			"status": "pending",
+			"attempts": 0,
+			"max_attempts": 3
+		}
+		
+		response = supabase.table("post_call_jobs").insert(job_data).execute()
+		
+		if not response.data:
+			raise Exception("Failed to enqueue resume session job")
+		
+		job_id = response.data[0].get('id')
+		
+		logger.info(f"Resume session job enqueued: {session_id} -> {original_session_id} (job_id: {job_id})")
+		
+		# Return immediately with job ID
+		return jsonify({
+			"status": "queued",
+			"message": "Resume session job enqueued",
+			"session_id": session_id,
+			"original_session_id": original_session_id,
+			"job_id": job_id
+		}), 202
+		
+	except Exception as e:
+		# Handle unexpected errors
+		logger.error(f"Error enqueuing resume session job: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
 @app.route("/jobs/<job_id>", methods=["GET"])
 @require_api_key
 def get_job_status(job_id: str):

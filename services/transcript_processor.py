@@ -228,10 +228,13 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 	def _upload_to_supabase(self, analysis_data: dict, call_data: dict) -> dict:
 		"""
 		Upload analysis data to interview_call_analysis table.
-		Includes all fields from transcript analysis plus filtered conversation.
+		
+		Stores:
+		- transcript: Filtered conversation JSON (for chat agent knowledge base)
+		- conversation_summary: LLM-generated summary (for resumed session context)
 		
 		Args:
-			analysis_data: Dict containing the full analysis from Claude
+			analysis_data: Dict containing the full analysis from Claude (includes conversation_summary)
 			call_data: Dict containing the original call data including conversation
 			
 		Returns:
@@ -249,7 +252,10 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 			"user_lastname": analysis_data.get("user_lastname"),
 			"created_at": analysis_data.get("created_at"),
 			"main_topic": analysis_data.get("main_topic"),
-			"conversation_narrative": json.dumps(filtered_conversation),
+			# transcript: filtered conversation JSON for chat agent knowledge base
+			"transcript": json.dumps(filtered_conversation),
+			# conversation_summary: LLM-generated summary for resumed session context
+			"conversation_summary": analysis_data.get("conversation_summary"),
 			"myers_briggs_code": analysis_data.get("myers_briggs_code"),
 			"personality": analysis_data.get("personality"),
 			"expertise_description": analysis_data.get("expertise_description"),
@@ -267,4 +273,119 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 			return response.data[0]
 		else:
 			raise Exception("Failed to upload analysis to Supabase")
+	
+	def append_to_transcript(self, original_session_id: str, new_session_id: str) -> dict:
+		"""
+		Append new conversation to an existing session's transcript.
+		Used for resume sessions where we want to add new conversation content
+		to an existing session record.
+		
+		Note: This updates the transcript (filtered conversation JSON) but does NOT
+		regenerate the conversation_summary. The summary will need to be
+		regenerated separately if needed.
+		
+		Args:
+			original_session_id: The original session ID to append to
+			new_session_id: The new session ID containing the resumed conversation
+			
+		Returns:
+			dict: Result with status and updated transcript
+			
+		Raises:
+			ValueError: If either session is not found
+			Exception: If processing fails
+		"""
+		logger.info(f"Appending conversation from {new_session_id} to {original_session_id}")
+		
+		# 1. Fetch the original session's transcript
+		original_response = self.supabase.table("interview_call_analysis")\
+			.select("session_id, transcript, user_id")\
+			.eq("session_id", original_session_id)\
+			.execute()
+		
+		if not original_response.data:
+			raise ValueError(f"Original session not found: {original_session_id}")
+		
+		original_record = original_response.data[0]
+		original_user_id = original_record.get("user_id")
+		
+		# Parse existing transcript
+		existing_transcript_str = original_record.get("transcript", "{}")
+		try:
+			if existing_transcript_str is None:
+				existing_transcript = {"items": []}
+			elif isinstance(existing_transcript_str, str):
+				existing_transcript = json.loads(existing_transcript_str)
+			else:
+				existing_transcript = existing_transcript_str
+		except json.JSONDecodeError:
+			existing_transcript = {"items": []}
+		
+		if existing_transcript is None:
+			existing_transcript = {"items": []}
+		
+		existing_items = existing_transcript.get("items", [])
+		logger.info(f"Original session has {len(existing_items)} conversation items")
+		
+		# 2. Fetch the new session's conversation from interview_calls
+		new_response = self.supabase.table("interview_calls")\
+			.select("session_id, user_id, conversation")\
+			.eq("session_id", new_session_id)\
+			.execute()
+		
+		if not new_response.data:
+			raise ValueError(f"New session not found: {new_session_id}")
+		
+		new_call = new_response.data[0]
+		new_user_id = new_call.get("user_id")
+		
+		# Security check: verify same user owns both sessions
+		if original_user_id != new_user_id:
+			raise ValueError("Session ownership mismatch - cannot append conversations from different users")
+		
+		new_conversation = new_call.get("conversation", {})
+		
+		# 3. Filter the new conversation items using the same logic as original processing
+		filtered_new = self._filter_conversation_items(new_conversation)
+		new_items = filtered_new.get("items", [])
+		logger.info(f"New session has {len(new_items)} filtered conversation items")
+		
+		# 4. Append new items to existing items
+		merged_items = existing_items + new_items
+		merged_transcript = {"items": merged_items}
+		
+		# 5. Update the interview_call_analysis record with merged transcript and updated_at
+		update_response = self.supabase.table("interview_call_analysis")\
+			.update({
+				"transcript": json.dumps(merged_transcript),
+				"updated_at": "now()"  # Use database's current timestamp
+			})\
+			.eq("session_id", original_session_id)\
+			.execute()
+		
+		if not update_response.data:
+			raise Exception(f"Failed to update transcript for {original_session_id}")
+		
+		logger.info(f"✅ Appended {len(new_items)} items to session {original_session_id} (total: {len(merged_items)})")
+		
+		# 6. Optionally mark the new session as a "resume child" for tracking
+		# This doesn't delete it but adds a reference
+		try:
+			self.supabase.table("interview_calls")\
+				.update({
+					"resumed_from": original_session_id
+				})\
+				.eq("session_id", new_session_id)\
+				.execute()
+		except Exception as e:
+			# Don't fail if this column doesn't exist
+			logger.debug(f"Could not set resumed_from reference: {e}")
+		
+		return {
+			"status": "success",
+			"original_session_id": original_session_id,
+			"new_session_id": new_session_id,
+			"items_appended": len(new_items),
+			"total_items": len(merged_items)
+		}
 

@@ -1,6 +1,6 @@
 # Backend Unit Tests
 
-This directory contains comprehensive unit tests for all backend services. **All 107 tests passing (100% success rate)** with an average code coverage of 87%.
+This directory contains comprehensive unit tests for all backend services. 
 
 ## Quick Start
 

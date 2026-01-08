@@ -63,7 +63,7 @@ def sample_call_data():
 
 @pytest.fixture
 def sample_analysis_data():
-    """Sample interview call analysis data (from LLM, without conversation_narrative)."""
+    """Sample interview call analysis data (from LLM, includes conversation_summary)."""
     return {
         'session_id': 'test-session-123',
         'user_id': 'user-456',
@@ -74,6 +74,7 @@ def sample_analysis_data():
         'myers_briggs_code': 'INTJ',
         'personality': 'Analytical and strategic thinker',
         'expertise_description': 'Expert in machine learning and AI systems',
+        'conversation_summary': 'The user discussed their expertise in artificial intelligence and machine learning. They explained their background in developing AI systems for healthcare applications. Key topics included neural network architectures, data preprocessing techniques, and the challenges of deploying AI in clinical settings.',
         'hot_take_1': 'AI will revolutionize healthcare within 5 years'
     }
 

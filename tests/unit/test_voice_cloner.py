@@ -264,7 +264,7 @@ class TestCloneVoiceWithCartesia:
         service = VoiceCloningService(mock_supabase, cartesia_api_key="test-key")
         service.cartesia = mock_cartesia_client
         
-        with pytest.raises(Exception, match="Voice cloning failed"):
+        with pytest.raises(Exception, match="Cartesia voice cloning failed"):
             service._clone_voice_with_cartesia('/nonexistent/path.wav', 'user-456')
     
     def test_api_error(self, mock_supabase, mock_cartesia_client):
@@ -280,7 +280,7 @@ class TestCloneVoiceWithCartesia:
         service.cartesia = mock_cartesia_client
         
         try:
-            with pytest.raises(Exception, match="Voice cloning failed"):
+            with pytest.raises(Exception, match="Cartesia voice cloning failed"):
                 service._clone_voice_with_cartesia(audio_path, 'user-456')
         finally:
             if os.path.exists(audio_path):
@@ -341,7 +341,7 @@ class TestCloneVoiceWithInworld:
             inworld_workspace_id="test-workspace"
         )
         
-        with pytest.raises(Exception, match="Voice cloning failed"):
+        with pytest.raises(FileNotFoundError, match="Audio file not found"):
             service._clone_voice_with_inworld('/nonexistent/path.wav', 'user-456')
     
     def test_missing_api_key(self, mock_supabase):
@@ -361,7 +361,7 @@ class TestCloneVoiceWithInworld:
         service.inworld_api_key = None
         
         try:
-            with pytest.raises(Exception, match="Voice cloning failed"):
+            with pytest.raises(ValueError, match="Inworld API key not configured"):
                 service._clone_voice_with_inworld(audio_path, 'user-456')
         finally:
             if os.path.exists(audio_path):
@@ -384,7 +384,7 @@ class TestCloneVoiceWithInworld:
         service.inworld_workspace_id = None
         
         try:
-            with pytest.raises(Exception, match="Voice cloning failed"):
+            with pytest.raises(ValueError, match="Inworld workspace ID not configured"):
                 service._clone_voice_with_inworld(audio_path, 'user-456')
         finally:
             if os.path.exists(audio_path):
@@ -411,7 +411,7 @@ class TestCloneVoiceWithInworld:
                 mock_response.text = "Internal Server Error"
                 mock_post.return_value = mock_response
                 
-                with pytest.raises(Exception, match="Voice cloning failed"):
+                with pytest.raises(Exception, match="Inworld API error"):
                     service._clone_voice_with_inworld(audio_path, 'user-456')
         finally:
             if os.path.exists(audio_path):
@@ -747,21 +747,28 @@ class TestCloneVoiceFromAudioData:
             inworld_workspace_id="test-workspace"
         )
         
-        audio_data = b'fake wav audio data for cloning'
+        # Use valid WAV magic bytes so the code recognizes it as WAV format
+        # WAV format: RIFF....WAVE
+        audio_data = b'RIFF' + b'\x00\x00\x00\x00' + b'WAVE' + b'fake audio content'
         
-        with patch.object(service, '_clone_voice_and_update_profile', return_value='new-voice-id-789') as mock_clone:
-            result = service.clone_voice_from_audio_data('user-456', audio_data)
-            
-            assert result['status'] == 'success'
-            assert result['message'] == 'Voice re-cloned successfully'
-            assert result['user_id'] == 'user-456'
-            assert result['voice_id'] == 'new-voice-id-789'
-            
-            # Verify the helper was called with a temp file path
-            mock_clone.assert_called_once()
-            call_args = mock_clone.call_args[0]
-            assert call_args[1] == 'user-456'  # user_id
-            assert call_args[0].endswith('.wav')  # audio_path
+        # Mock AudioSegment.from_file since we're using fake WAV data
+        mock_audio = MagicMock(spec=AudioSegment)
+        mock_audio.dBFS = -20  # Normal audio level
+        
+        with patch('services.voice_cloner.AudioSegment.from_file', return_value=mock_audio):
+            with patch.object(service, '_clone_voice_and_update_profile', return_value='new-voice-id-789') as mock_clone:
+                result = service.clone_voice_from_audio_data('user-456', audio_data)
+                
+                assert result['status'] == 'success'
+                assert result['message'] == 'Voice re-cloned successfully'
+                assert result['user_id'] == 'user-456'
+                assert result['voice_id'] == 'new-voice-id-789'
+                
+                # Verify the helper was called with a temp file path
+                mock_clone.assert_called_once()
+                call_args = mock_clone.call_args[0]
+                assert call_args[1] == 'user-456'  # user_id
+                assert call_args[0].endswith('.wav')  # audio_path
     
     def test_missing_user_id(self, mock_supabase):
         """Test error when user_id is missing."""
@@ -807,11 +814,17 @@ class TestCloneVoiceFromAudioData:
             inworld_workspace_id="test-workspace"
         )
         
-        audio_data = b'fake wav audio data'
+        # Use valid WAV magic bytes
+        audio_data = b'RIFF' + b'\x00\x00\x00\x00' + b'WAVE' + b'fake audio content'
         
-        with patch.object(service, '_clone_voice_and_update_profile', side_effect=Exception("API Error")):
-            with pytest.raises(Exception, match="API Error"):
-                service.clone_voice_from_audio_data('user-456', audio_data)
+        # Mock AudioSegment.from_file since we're using fake WAV data
+        mock_audio = MagicMock(spec=AudioSegment)
+        mock_audio.dBFS = -20
+        
+        with patch('services.voice_cloner.AudioSegment.from_file', return_value=mock_audio):
+            with patch.object(service, '_clone_voice_and_update_profile', side_effect=Exception("API Error")):
+                with pytest.raises(Exception, match="API Error"):
+                    service.clone_voice_from_audio_data('user-456', audio_data)
     
     def test_temp_file_cleanup_on_success(self, mock_supabase):
         """Test that temp file is cleaned up after successful cloning."""
@@ -821,7 +834,8 @@ class TestCloneVoiceFromAudioData:
             inworld_workspace_id="test-workspace"
         )
         
-        audio_data = b'fake wav audio data for cloning'
+        # Use valid WAV magic bytes
+        audio_data = b'RIFF' + b'\x00\x00\x00\x00' + b'WAVE' + b'fake audio content'
         temp_path_captured = None
         
         def capture_path(audio_path, user_id):
@@ -829,8 +843,13 @@ class TestCloneVoiceFromAudioData:
             temp_path_captured = audio_path
             return 'voice-id-123'
         
-        with patch.object(service, '_clone_voice_and_update_profile', side_effect=capture_path):
-            service.clone_voice_from_audio_data('user-456', audio_data)
+        # Mock AudioSegment.from_file since we're using fake WAV data
+        mock_audio = MagicMock(spec=AudioSegment)
+        mock_audio.dBFS = -20
+        
+        with patch('services.voice_cloner.AudioSegment.from_file', return_value=mock_audio):
+            with patch.object(service, '_clone_voice_and_update_profile', side_effect=capture_path):
+                service.clone_voice_from_audio_data('user-456', audio_data)
         
         # Temp file should be cleaned up
         assert temp_path_captured is not None
@@ -844,7 +863,8 @@ class TestCloneVoiceFromAudioData:
             inworld_workspace_id="test-workspace"
         )
         
-        audio_data = b'fake wav audio data for cloning'
+        # Use valid WAV magic bytes
+        audio_data = b'RIFF' + b'\x00\x00\x00\x00' + b'WAVE' + b'fake audio content'
         temp_path_captured = None
         
         def capture_path_and_fail(audio_path, user_id):
@@ -852,9 +872,14 @@ class TestCloneVoiceFromAudioData:
             temp_path_captured = audio_path
             raise Exception("Cloning failed")
         
-        with patch.object(service, '_clone_voice_and_update_profile', side_effect=capture_path_and_fail):
-            with pytest.raises(Exception):
-                service.clone_voice_from_audio_data('user-456', audio_data)
+        # Mock AudioSegment.from_file since we're using fake WAV data
+        mock_audio = MagicMock(spec=AudioSegment)
+        mock_audio.dBFS = -20
+        
+        with patch('services.voice_cloner.AudioSegment.from_file', return_value=mock_audio):
+            with patch.object(service, '_clone_voice_and_update_profile', side_effect=capture_path_and_fail):
+                with pytest.raises(Exception):
+                    service.clone_voice_from_audio_data('user-456', audio_data)
         
         # Temp file should still be cleaned up
         assert temp_path_captured is not None
