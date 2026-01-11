@@ -1,6 +1,6 @@
 """
 Message orchestrator service.
-Handles message notification processing and mail session post-processing.
+Handles message notification processing, chat message extraction, and mail session post-processing.
 """
 
 import json
@@ -8,22 +8,29 @@ import logging
 from datetime import datetime, UTC
 from typing import Dict, Any, List
 
+from services.chat_message_extractor import ChatMessageExtractor
+
 logger = logging.getLogger(__name__)
 
 
 class MessageOrchestrator:
     """Service for orchestrating message-related post-processing tasks."""
     
-    def __init__(self, supabase_client, email_service):
+    def __init__(self, supabase_client, email_service, anthropic_api_key: str = None):
         """
         Initialize the message orchestrator.
         
         Args:
             supabase_client: Initialized Supabase client
             email_service: Initialized EmailService instance
+            anthropic_api_key: Anthropic API key for chat message extraction (optional)
         """
         self.supabase = supabase_client
         self.email_service = email_service
+        self.chat_message_extractor = ChatMessageExtractor(
+            supabase_client=supabase_client,
+            anthropic_api_key=anthropic_api_key
+        )
     
     def process_message_notifications(self) -> Dict[str, Any]:
         """
@@ -77,6 +84,21 @@ class MessageOrchestrator:
                 logger.error(f"Error sending notification to expert {expert_user_id}: {e}")
         
         return {"status": "success", "notifications_sent": sent_count}
+    
+    def process_chat_session(self, chat_session_id: str) -> Dict[str, Any]:
+        """
+        Process a chat session to extract messages for the expert.
+        
+        Delegates to ChatMessageExtractor to analyze the conversation
+        and insert any messages intended for the expert.
+        
+        Args:
+            chat_session_id: The chat session ID to process
+            
+        Returns:
+            dict: Processing result with status and extracted messages
+        """
+        return self.chat_message_extractor.process_chat_session(chat_session_id)
     
     def process_mail_session(self, session_id: str, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """

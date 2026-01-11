@@ -25,7 +25,6 @@ from services.post_call_orchestrator import PostCallOrchestrator
 from services.hot_take_video_generator import HotTakeVideoGenerationService
 from services.voice_cloner import VoiceCloningService
 from services.transcript_processor import TranscriptProcessor
-from services.chat_message_extractor import ChatMessageExtractor
 from services.email_service import EmailService
 from services.message_orchestrator import MessageOrchestrator
 
@@ -103,17 +102,14 @@ class JobWorker:
             supabase_client=self.supabase,
             anthropic_api_key=ANTHROPIC_API_KEY
         )
-        self.chat_message_extractor = ChatMessageExtractor(
-            supabase_client=self.supabase,
-            anthropic_api_key=ANTHROPIC_API_KEY
-        )
         self.email_service = EmailService(
             supabase_client=self.supabase,
             resend_api_key=RESEND_API_KEY
         )
         self.message_orchestrator = MessageOrchestrator(
             supabase_client=self.supabase,
-            email_service=self.email_service
+            email_service=self.email_service,
+            anthropic_api_key=ANTHROPIC_API_KEY
         )
         self.worker_id = os.getenv('RENDER_INSTANCE_ID', f'worker-{os.getpid()}')
         logger.info(f"Worker initialized with ID: {self.worker_id}")
@@ -192,7 +188,7 @@ class JobWorker:
                 )
             elif job_type == 'chat_message_extraction':
                 # Extract messages from chat session for the expert
-                result = self.chat_message_extractor.process_chat_session(
+                result = self.message_orchestrator.process_chat_session(
                     chat_session_id=session_id
                 )
             elif job_type == 'message_notification':
