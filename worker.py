@@ -25,6 +25,9 @@ from services.post_call_orchestrator import PostCallOrchestrator
 from services.hot_take_video_generator import HotTakeVideoGenerationService
 from services.voice_cloner import VoiceCloningService
 from services.transcript_processor import TranscriptProcessor
+from services.chat_message_extractor import ChatMessageExtractor
+from services.email_service import EmailService
+from services.message_orchestrator import MessageOrchestrator
 
 # Load environment variables: prefer .env.local, fallback to default .env if present
 _loaded = load_dotenv(".env.local")
@@ -56,6 +59,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 INWORLD_API_KEY = os.getenv("INWORLD_API_KEY")
 INWORLD_WORKSPACE_ID = os.getenv("INWORLD_WORKSPACE_ID")
 VOICE_PROVIDER = os.getenv("VOICE_PROVIDER", "inworld")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
 POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", "5"))  # seconds
 STUCK_JOB_TIMEOUT = int(os.getenv("STUCK_JOB_TIMEOUT", "30"))  # minutes
@@ -98,6 +102,18 @@ class JobWorker:
         self.transcript_processor = TranscriptProcessor(
             supabase_client=self.supabase,
             anthropic_api_key=ANTHROPIC_API_KEY
+        )
+        self.chat_message_extractor = ChatMessageExtractor(
+            supabase_client=self.supabase,
+            anthropic_api_key=ANTHROPIC_API_KEY
+        )
+        self.email_service = EmailService(
+            supabase_client=self.supabase,
+            resend_api_key=RESEND_API_KEY
+        )
+        self.message_orchestrator = MessageOrchestrator(
+            supabase_client=self.supabase,
+            email_service=self.email_service
         )
         self.worker_id = os.getenv('RENDER_INSTANCE_ID', f'worker-{os.getpid()}')
         logger.info(f"Worker initialized with ID: {self.worker_id}")
@@ -174,6 +190,17 @@ class JobWorker:
                     original_session_id=original_session_id,
                     new_session_id=session_id
                 )
+            elif job_type == 'chat_message_extraction':
+                # Extract messages from chat session for the expert
+                result = self.chat_message_extractor.process_chat_session(
+                    chat_session_id=session_id
+                )
+            elif job_type == 'message_notification':
+                # Send notification emails to experts about new messages
+                result = self.message_orchestrator.process_message_notifications()
+            elif job_type == 'mail_session':
+                # Process mail agent session - handle answered questions and intros
+                result = self.message_orchestrator.process_mail_session(session_id, job_data)
             else:
                 # Default: post-call orchestration
                 result = asyncio.run(self.orchestrator.process_call_completion(session_id))
