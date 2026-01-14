@@ -210,6 +210,59 @@ def resume_session_orchestrator_endpoint():
 		return jsonify({"error": str(e)}), 500
 
 
+@app.route("/chat-session-orchestrator", methods=["POST"])
+@require_api_key
+def chat_session_orchestrator_endpoint():
+	"""
+	Process a completed chat session to extract messages for the expert.
+	Called by the chat agent after saving the chat session transcript to Supabase.
+	
+	This enqueues a job in the post_call_jobs table with job_type='chat_message_extraction'.
+	A background worker will pick up and process the job asynchronously.
+	
+	Required fields:
+	- session_id: The chat session ID (from chat_sessions table)
+	"""
+	try:
+		# Get data from request
+		data = request.get_json()
+		session_id = data.get("session_id")
+		
+		if not session_id:
+			return jsonify({"error": "session_id is required"}), 400
+		
+		# Enqueue job in Supabase with job_type='chat_message_extraction'
+		job_data = {
+			"session_id": session_id,
+			"job_type": "chat_message_extraction",
+			"status": "pending",
+			"attempts": 0,
+			"max_attempts": 3
+		}
+		
+		response = supabase.table("post_call_jobs").insert(job_data).execute()
+		
+		if not response.data:
+			raise Exception("Failed to enqueue chat session job")
+		
+		job_id = response.data[0].get('id')
+		
+		logger.info(f"Chat session job enqueued for session {session_id} (job_id: {job_id})")
+		
+		# Return immediately with job ID
+		return jsonify({
+			"status": "queued",
+			"message": "Chat message extraction job enqueued",
+			"session_id": session_id,
+			"job_id": job_id
+		}), 202
+		
+	except Exception as e:
+		# Handle unexpected errors
+		logger.error(f"Error enqueuing chat session job: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
 @app.route("/jobs/<job_id>", methods=["GET"])
 @require_api_key
 def get_job_status(job_id: str):
