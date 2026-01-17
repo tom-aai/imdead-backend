@@ -186,11 +186,6 @@ class JobWorker:
                     original_session_id=original_session_id,
                     new_session_id=session_id
                 )
-            elif job_type == 'chat_message_extraction':
-                # Extract messages from chat session for the expert
-                result = self.message_orchestrator.process_chat_session(
-                    chat_session_id=session_id
-                )
             elif job_type == 'message_notification':
                 # Send notification emails to experts about new messages
                 result = self.message_orchestrator.process_message_notifications()

@@ -203,3 +203,23 @@ def mock_inworld_response():
         ]
     }
 
+
+@pytest.fixture
+def sample_seeker_message():
+    """Sample seeker_messages table record."""
+    return {
+        "id": "msg-123",
+        "source_session_id": "source-456",
+        "chat_session_id": "chat-789",
+        "expert_user_id": "expert-001",
+        "seeker_user_id": "seeker-002",
+        "seeker_name": "Jane Doe",
+        "seeker_company": "TechCorp",
+        "seeker_role": "Engineer",
+        "message_content": "What is machine learning?",
+        "message_type": "question",
+        "status": "pending",
+        "expert_response": None,
+        "created_at": "2024-01-15T10:30:00Z"
+    }
+

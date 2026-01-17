@@ -122,17 +122,17 @@ class EmailService:
             logger.error(f"Error sending expert notification: {e}")
             return {"status": "error", "error": str(e)}
     
-    def send_student_chat_updated(
+    def send_seeker_chat_updated(
         self,
-        student_user_id: str,
+        seeker_user_id: str,
         expert_name: str,
         share_token: str
     ) -> Dict[str, Any]:
         """
-        Send notification to student that the chat agent has been updated with new answers.
+        Send notification to seeker that the chat agent has been updated with new answers.
         
         Args:
-            student_user_id: The student's user ID
+            seeker_user_id: The seeker's user ID
             expert_name: The expert's name
             share_token: The share token for the chat link
             
@@ -143,14 +143,14 @@ class EmailService:
             logger.warning("Cannot send email - Resend API key not configured")
             return {"status": "skipped", "reason": "No API key"}
         
-        # Get student's email
-        student_info = self._get_user_info(student_user_id)
-        if not student_info or not student_info.get("email"):
-            logger.warning(f"Could not find email for student {student_user_id}")
-            return {"status": "error", "error": "Student email not found"}
+        # Get seeker's email
+        seeker_info = self._get_user_info(seeker_user_id)
+        if not seeker_info or not seeker_info.get("email"):
+            logger.warning(f"Could not find email for seeker {seeker_user_id}")
+            return {"status": "error", "error": "Seeker email not found"}
         
-        student_email = student_info["email"]
-        student_name = student_info.get("name", "there")
+        seeker_email = seeker_info["email"]
+        seeker_name = seeker_info.get("name", "there")
         
         chat_url = f"{self.app_url}/chat/{share_token}"
         
@@ -158,7 +158,7 @@ class EmailService:
         
         html_content = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #1a1a1a;">Hi {student_name},</h2>
+            <h2 style="color: #1a1a1a;">Hi {seeker_name},</h2>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
                 Great news! <strong>{expert_name}</strong> has responded to your questions.
@@ -180,37 +180,37 @@ class EmailService:
         try:
             result = resend.Emails.send({
                 "from": self.from_email,
-                "to": [student_email],
+                "to": [seeker_email],
                 "subject": subject,
                 "html": html_content
             })
             
-            logger.info(f"Sent chat update notification to {student_email}")
+            logger.info(f"Sent chat update notification to {seeker_email}")
             return {"status": "sent", "email_id": result.get("id")}
             
         except Exception as e:
-            logger.error(f"Error sending student notification: {e}")
+            logger.error(f"Error sending seeker notification: {e}")
             return {"status": "error", "error": str(e)}
     
     def send_introduction_email(
         self,
         expert_user_id: str,
-        student_user_id: str,
-        student_name: str,
-        student_company: str,
-        student_role: str,
-        student_message: str
+        seeker_user_id: str,
+        seeker_name: str,
+        seeker_company: str,
+        seeker_role: str,
+        seeker_message: str
     ) -> Dict[str, Any]:
         """
-        Send introduction email connecting expert and student.
+        Send introduction email connecting expert and seeker.
         
         Args:
             expert_user_id: The expert's user ID
-            student_user_id: The student's user ID
-            student_name: The student's name
-            student_company: The student's company
-            student_role: The student's role
-            student_message: The student's introduction message
+            seeker_user_id: The seeker's user ID
+            seeker_name: The seeker's name
+            seeker_company: The seeker's company
+            seeker_role: The seeker's role
+            seeker_message: The seeker's introduction message
             
         Returns:
             dict: Result with status and details
@@ -221,50 +221,50 @@ class EmailService:
         
         # Get both users' info
         expert_info = self._get_user_info(expert_user_id)
-        student_info = self._get_user_info(student_user_id)
+        seeker_info = self._get_user_info(seeker_user_id)
         
         if not expert_info or not expert_info.get("email"):
             return {"status": "error", "error": "Expert email not found"}
-        if not student_info or not student_info.get("email"):
-            return {"status": "error", "error": "Student email not found"}
+        if not seeker_info or not seeker_info.get("email"):
+            return {"status": "error", "error": "Seeker email not found"}
         
         expert_email = expert_info["email"]
         expert_name = expert_info.get("name", "Expert")
-        student_email = student_info["email"]
+        seeker_email = seeker_info["email"]
         
-        # Build student context
-        student_context = student_name
-        if student_role and student_company:
-            student_context = f"{student_name}, {student_role} at {student_company}"
-        elif student_role:
-            student_context = f"{student_name}, {student_role}"
-        elif student_company:
-            student_context = f"{student_name} from {student_company}"
+        # Build seeker context
+        seeker_context = seeker_name
+        if seeker_role and seeker_company:
+            seeker_context = f"{seeker_name}, {seeker_role} at {seeker_company}"
+        elif seeker_role:
+            seeker_context = f"{seeker_name}, {seeker_role}"
+        elif seeker_company:
+            seeker_context = f"{seeker_name} from {seeker_company}"
         
-        subject = f"Introduction: {student_name} would like to connect"
+        subject = f"Introduction: {seeker_name} would like to connect"
         
         html_content = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #1a1a1a;">Introduction</h2>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                Hi {expert_name} and {student_name},
+                Hi {expert_name} and {seeker_name},
             </p>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                I'm connecting you two! {student_name} chatted with {expert_name}'s avatar and 
+                I'm connecting you two! {seeker_name} chatted with {expert_name}'s avatar and 
                 requested an introduction.
             </p>
             
             <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
                 <p style="color: #333; font-size: 14px; margin: 0 0 10px 0;">
-                    <strong>About {student_name}:</strong>
+                    <strong>About {seeker_name}:</strong>
                 </p>
                 <p style="color: #333; font-size: 14px; margin: 0 0 10px 0;">
-                    {student_context}
+                    {seeker_context}
                 </p>
                 <p style="color: #333; font-size: 14px; margin: 0;">
-                    <strong>Their message:</strong> {student_message}
+                    <strong>Their message:</strong> {seeker_message}
                 </p>
             </div>
             
@@ -281,13 +281,13 @@ class EmailService:
         try:
             result = resend.Emails.send({
                 "from": self.from_email,
-                "to": [expert_email, student_email],
+                "to": [expert_email, seeker_email],
                 "subject": subject,
                 "html": html_content,
-                "reply_to": [expert_email, student_email]
+                "reply_to": [expert_email, seeker_email]
             })
             
-            logger.info(f"Sent introduction email connecting {expert_email} and {student_email}")
+            logger.info(f"Sent introduction email connecting {expert_email} and {seeker_email}")
             return {"status": "sent", "email_id": result.get("id")}
             
         except Exception as e:

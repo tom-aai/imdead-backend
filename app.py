@@ -214,11 +214,13 @@ def resume_session_orchestrator_endpoint():
 @require_api_key
 def chat_session_orchestrator_endpoint():
 	"""
-	Process a completed chat session to extract messages for the expert.
 	Called by the chat agent after saving the chat session transcript to Supabase.
 	
-	This enqueues a job in the post_call_jobs table with job_type='chat_message_extraction'.
-	A background worker will pick up and process the job asynchronously.
+	Messages are created directly by the chat agent during the conversation via
+	the create_message tool (inserted into seeker_messages with status='pending').
+	
+	This endpoint enqueues a message_notification job to notify the expert
+	about any new pending messages from this session.
 	
 	Required fields:
 	- session_id: The chat session ID (from chat_sessions table)
@@ -231,10 +233,10 @@ def chat_session_orchestrator_endpoint():
 		if not session_id:
 			return jsonify({"error": "session_id is required"}), 400
 		
-		# Enqueue job in Supabase with job_type='chat_message_extraction'
+		# Enqueue message_notification job to notify expert of new messages
 		job_data = {
 			"session_id": session_id,
-			"job_type": "chat_message_extraction",
+			"job_type": "message_notification",
 			"status": "pending",
 			"attempts": 0,
 			"max_attempts": 3
@@ -243,23 +245,21 @@ def chat_session_orchestrator_endpoint():
 		response = supabase.table("post_call_jobs").insert(job_data).execute()
 		
 		if not response.data:
-			raise Exception("Failed to enqueue chat session job")
+			raise Exception("Failed to enqueue message notification job")
 		
 		job_id = response.data[0].get('id')
 		
-		logger.info(f"Chat session job enqueued for session {session_id} (job_id: {job_id})")
+		logger.info(f"Message notification job enqueued for chat session {session_id} (job_id: {job_id})")
 		
-		# Return immediately with job ID
 		return jsonify({
 			"status": "queued",
-			"message": "Chat message extraction job enqueued",
+			"message": "Message notification job enqueued",
 			"session_id": session_id,
 			"job_id": job_id
 		}), 202
 		
 	except Exception as e:
-		# Handle unexpected errors
-		logger.error(f"Error enqueuing chat session job: {e}", exc_info=True)
+		logger.error(f"Error enqueuing message notification job: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
 

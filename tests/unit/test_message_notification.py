@@ -71,7 +71,7 @@ class TestMessageNotificationProcessing:
 
 
 class TestMailSessionProcessing:
-    """Test suite for process_mail_session."""
+    """Test suite for process_mail_session - status-driven approach."""
     
     @pytest.fixture
     def mock_email_service(self):
@@ -93,38 +93,18 @@ class TestMailSessionProcessing:
         
         assert "original_session_id" in str(exc_info.value)
     
-    def test_session_not_found_raises(self, orchestrator, mock_supabase):
-        """Test that missing session raises error."""
-        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
-        
-        with pytest.raises(ValueError) as exc_info:
-            orchestrator.process_mail_session(
-                "mail-session-123", 
-                {"original_session_id": "source-456"}
-            )
-        
-        assert "Mail session not found" in str(exc_info.value)
-    
-    def test_processes_answered_questions(self, orchestrator, mock_supabase):
-        """Test processing answered questions from mail session."""
-        # Mock session with answered question tool call
-        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [{
-            "conversation": {
-                "items": [
-                    {
-                        "tool_calls": [
-                            {
-                                "name": "answer_question",
-                                "arguments": {
-                                    "message_id": "msg-123",
-                                    "response": "Here is my answer..."
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-        }]
+    def test_processes_answered_messages_by_status(self, orchestrator, mock_supabase):
+        """Test processing answered messages from seeker_messages table."""
+        mock_supabase.table.return_value.select.return_value\
+            .eq.return_value.in_.return_value\
+            .execute.return_value.data = [{
+                "id": "msg-123",
+                "message_content": "What is ML?",
+                "expert_response": "ML is...",
+                "seeker_name": "Jane",
+                "seeker_user_id": "seeker-456",
+                "status": "answered"
+            }]
         
         result = orchestrator.process_mail_session(
             "mail-session-123",
@@ -132,27 +112,23 @@ class TestMailSessionProcessing:
         )
         
         assert result["status"] == "success"
-        assert result["answered_questions"] == 1
+        assert result["answered_processed"] == 1
+        assert result["intros_processed"] == 0
     
-    def test_processes_approved_introductions(self, orchestrator, mock_supabase, mock_email_service):
-        """Test processing approved introductions from mail session."""
-        # Mock session with approved intro tool call
-        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [{
-            "conversation": {
-                "items": [
-                    {
-                        "tool_calls": [
-                            {
-                                "name": "approve_introduction",
-                                "arguments": {
-                                    "message_id": "msg-789"
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-        }]
+    def test_processes_intro_approved_messages(self, orchestrator, mock_supabase, mock_email_service):
+        """Test processing intro_approved messages."""
+        mock_supabase.table.return_value.select.return_value\
+            .eq.return_value.in_.return_value\
+            .execute.return_value.data = [{
+                "id": "msg-789",
+                "seeker_name": "Alex",
+                "seeker_user_id": "seeker-789",
+                "seeker_company": "TechCorp",
+                "seeker_role": "Engineer",
+                "expert_user_id": "expert-001",
+                "message_content": "I'd love to connect",
+                "status": "intro_approved"
+            }]
         
         result = orchestrator.process_mail_session(
             "mail-session-123",
@@ -160,7 +136,116 @@ class TestMailSessionProcessing:
         )
         
         assert result["status"] == "success"
-        assert result["approved_intros"] == 1
+        assert result["answered_processed"] == 0
+        assert result["intros_processed"] == 1
+        mock_email_service.send_introduction_email.assert_called_once()
+    
+    def test_updates_answered_to_answer_delivered(self, orchestrator, mock_supabase):
+        """Test that answered messages get status updated to answer_delivered."""
+        mock_supabase.table.return_value.select.return_value\
+            .eq.return_value.in_.return_value\
+            .execute.return_value.data = [{
+                "id": "msg-123",
+                "status": "answered",
+                "message_content": "Question",
+                "expert_response": "Answer",
+                "seeker_name": "Test",
+                "seeker_user_id": "seeker-123"
+            }]
+        
+        orchestrator.process_mail_session(
+            "mail-session-123",
+            {"original_session_id": "source-456"}
+        )
+        
+        # Verify status update to answer_delivered was called
+        update_calls = [call for call in mock_supabase.table.return_value.update.call_args_list]
+        assert any(
+            call[0][0].get("status") == "answer_delivered" 
+            for call in update_calls
+        )
+    
+    def test_updates_intro_approved_to_intro_sent(
+        self, orchestrator, mock_supabase, mock_email_service
+    ):
+        """Test that intro_approved messages get status updated to intro_sent."""
+        mock_supabase.table.return_value.select.return_value\
+            .eq.return_value.in_.return_value\
+            .execute.return_value.data = [{
+                "id": "msg-789",
+                "seeker_name": "Alex",
+                "seeker_user_id": "seeker-789",
+                "expert_user_id": "expert-001",
+                "status": "intro_approved"
+            }]
+        
+        orchestrator.process_mail_session(
+            "mail-session-123",
+            {"original_session_id": "source-456"}
+        )
+        
+        mock_email_service.send_introduction_email.assert_called_once()
+        # Verify status update to intro_sent was called
+        update_calls = [call for call in mock_supabase.table.return_value.update.call_args_list]
+        assert any(
+            call[0][0].get("status") == "intro_sent" 
+            for call in update_calls
+        )
+    
+    def test_ignores_already_processed_messages(self, orchestrator, mock_supabase):
+        """Test that answer_delivered and intro_sent are not reprocessed."""
+        # Query only returns answered/intro_approved, so already-processed messages
+        # won't be in the result set
+        mock_supabase.table.return_value.select.return_value\
+            .eq.return_value.in_.return_value\
+            .execute.return_value.data = []
+        
+        result = orchestrator.process_mail_session(
+            "mail-session-123",
+            {"original_session_id": "source-456"}
+        )
+        
+        assert result["answered_processed"] == 0
+        assert result["intros_processed"] == 0
+    
+    def test_processes_mixed_message_types(self, orchestrator, mock_supabase, mock_email_service):
+        """Test processing a mix of answered and intro_approved messages."""
+        mock_supabase.table.return_value.select.return_value\
+            .eq.return_value.in_.return_value\
+            .execute.return_value.data = [
+                {
+                    "id": "msg-1",
+                    "status": "answered",
+                    "message_content": "Question 1",
+                    "expert_response": "Answer 1",
+                    "seeker_name": "Jane",
+                    "seeker_user_id": "seeker-1"
+                },
+                {
+                    "id": "msg-2",
+                    "status": "intro_approved",
+                    "seeker_name": "Alex",
+                    "seeker_user_id": "seeker-2",
+                    "expert_user_id": "expert-1"
+                },
+                {
+                    "id": "msg-3",
+                    "status": "answered",
+                    "message_content": "Question 2",
+                    "expert_response": "Answer 2",
+                    "seeker_name": "Bob",
+                    "seeker_user_id": "seeker-3"
+                }
+            ]
+        
+        result = orchestrator.process_mail_session(
+            "mail-session-123",
+            {"original_session_id": "source-456"}
+        )
+        
+        assert result["status"] == "success"
+        assert result["answered_processed"] == 2
+        assert result["intros_processed"] == 1
 
 
 class TestAppendQAToTranscript:
@@ -197,7 +282,7 @@ class TestAppendQAToTranscript:
             source_session_id="session-123",
             question="What is machine learning?",
             answer="ML is a subset of AI...",
-            student_name="Jane"
+            seeker_name="Jane"
         )
         
         # Verify update was called
@@ -212,12 +297,12 @@ class TestAppendQAToTranscript:
             source_session_id="session-123",
             question="What is AI?",
             answer="AI is...",
-            student_name="Test"
+            seeker_name="Test"
         )
 
 
-class TestNotifyStudentOfAnswer:
-    """Test suite for _notify_student_of_answer."""
+class TestNotifySeekerOfAnswer:
+    """Test suite for _notify_seeker_of_answer."""
     
     @pytest.fixture
     def mock_email_service(self):
@@ -232,8 +317,8 @@ class TestNotifyStudentOfAnswer:
             email_service=mock_email_service
         )
     
-    def test_sends_notification_to_student(self, orchestrator, mock_supabase, mock_email_service):
-        """Test that student notification is sent."""
+    def test_sends_notification_to_seeker(self, orchestrator, mock_supabase, mock_email_service):
+        """Test that seeker notification is sent."""
         # Mock share token lookup
         mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{
             "share_token": "abc123"
@@ -246,24 +331,24 @@ class TestNotifyStudentOfAnswer:
         }]
         
         message = {
-            "student_user_id": "student-123"
+            "seeker_user_id": "seeker-123"
         }
         
-        orchestrator._notify_student_of_answer(message, "source-session-456")
+        orchestrator._notify_seeker_of_answer(message, "source-session-456")
         
         # Verify email was sent
-        mock_email_service.send_student_chat_updated.assert_called_once()
+        mock_email_service.send_seeker_chat_updated.assert_called_once()
     
     def test_handles_no_share_token(self, orchestrator, mock_supabase, mock_email_service):
         """Test handling when no share token exists."""
         mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
         
         message = {
-            "student_user_id": "student-123"
+            "seeker_user_id": "seeker-123"
         }
         
         # Should not raise
-        orchestrator._notify_student_of_answer(message, "source-session-456")
+        orchestrator._notify_seeker_of_answer(message, "source-session-456")
         
         # Email should not be sent
-        mock_email_service.send_student_chat_updated.assert_not_called()
+        mock_email_service.send_seeker_chat_updated.assert_not_called()

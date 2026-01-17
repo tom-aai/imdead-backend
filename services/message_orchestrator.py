@@ -1,14 +1,12 @@
 """
 Message orchestrator service.
-Handles message notification processing, chat message extraction, and mail session post-processing.
+Handles message notification processing and mail session post-processing.
 """
 
 import json
 import logging
 from datetime import datetime, UTC
 from typing import Dict, Any, List
-
-from services.chat_message_extractor import ChatMessageExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +21,10 @@ class MessageOrchestrator:
         Args:
             supabase_client: Initialized Supabase client
             email_service: Initialized EmailService instance
-            anthropic_api_key: Anthropic API key for chat message extraction (optional)
+            anthropic_api_key: Anthropic API key (no longer used, kept for API compatibility)
         """
         self.supabase = supabase_client
         self.email_service = email_service
-        self.chat_message_extractor = ChatMessageExtractor(
-            supabase_client=supabase_client,
-            anthropic_api_key=anthropic_api_key
-        )
     
     def process_message_notifications(self) -> Dict[str, Any]:
         """
@@ -45,7 +39,7 @@ class MessageOrchestrator:
         logger.info("Processing message notifications...")
         
         # Find experts with pending messages that haven't been notified
-        response = self.supabase.table("student_messages")\
+        response = self.supabase.table("seeker_messages")\
             .select("expert_user_id, source_session_id")\
             .eq("status", "pending")\
             .is_("notification_sent_at", "null")\
@@ -71,7 +65,7 @@ class MessageOrchestrator:
                 
                 if result.get("status") == "sent":
                     # Mark messages as notified
-                    self.supabase.table("student_messages")\
+                    self.supabase.table("seeker_messages")\
                         .update({"notification_sent_at": datetime.now(UTC).isoformat()})\
                         .eq("expert_user_id", expert_user_id)\
                         .eq("source_session_id", source_session_id)\
@@ -85,28 +79,13 @@ class MessageOrchestrator:
         
         return {"status": "success", "notifications_sent": sent_count}
     
-    def process_chat_session(self, chat_session_id: str) -> Dict[str, Any]:
-        """
-        Process a chat session to extract messages for the expert.
-        
-        Delegates to ChatMessageExtractor to analyze the conversation
-        and insert any messages intended for the expert.
-        
-        Args:
-            chat_session_id: The chat session ID to process
-            
-        Returns:
-            dict: Processing result with status and extracted messages
-        """
-        return self.chat_message_extractor.process_chat_session(chat_session_id)
-    
     def process_mail_session(self, session_id: str, job_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a mail agent session after it ends.
         
-        Extracts answered questions and approved introductions,
-        updates the student_messages table, appends Q&A to transcript,
-        and sends appropriate emails.
+        Queries seeker_messages by status to find messages that were answered
+        or had introductions approved by the MailAgent, then processes them
+        (appends Q&A to transcript, sends emails, updates status).
         
         Args:
             session_id: The mail session ID
@@ -122,135 +101,78 @@ class MessageOrchestrator:
         
         logger.info(f"Processing mail session {session_id} for source {original_session_id}")
         
-        # Fetch the mail session conversation
-        response = self.supabase.table("interview_calls")\
-            .select("conversation")\
-            .eq("session_id", session_id)\
+        # Query for messages needing backend processing
+        # These were updated by the MailAgent's handle_message tool
+        messages = self.supabase.table("seeker_messages")\
+            .select("*")\
+            .eq("source_session_id", original_session_id)\
+            .in_("status", ["answered", "intro_approved"])\
             .execute()
         
-        if not response.data:
-            raise ValueError(f"Mail session not found: {session_id}")
+        answered_count = 0
+        intros_count = 0
         
-        conversation = response.data[0].get("conversation", {})
+        for msg in messages.data or []:
+            if msg["status"] == "answered":
+                self._process_answered_message(msg, original_session_id)
+                answered_count += 1
+            elif msg["status"] == "intro_approved":
+                self._process_approved_intro(msg)
+                intros_count += 1
         
-        # Extract answered questions and approved intros from conversation
-        answered_questions = []
-        approved_intros = []
-        
-        for item in conversation.get("items", []):
-            tool_calls = item.get("tool_calls", [])
-            for tool_call in tool_calls:
-                name = tool_call.get("name", "")
-                args = tool_call.get("arguments", {})
-                
-                if name == "answer_question":
-                    answered_questions.append({
-                        "message_id": args.get("message_id"),
-                        "response": args.get("response")
-                    })
-                elif name == "approve_introduction":
-                    approved_intros.append({
-                        "message_id": args.get("message_id")
-                    })
-        
-        results = {
-            "answered_questions": len(answered_questions),
-            "approved_intros": len(approved_intros)
+        return {
+            "status": "success",
+            "answered_processed": answered_count,
+            "intros_processed": intros_count
         }
-        
-        # Process answered questions
-        for aq in answered_questions:
-            self._process_answered_question(aq, original_session_id)
-        
-        # Process approved introductions
-        for intro in approved_intros:
-            self._process_approved_intro(intro)
-        
-        return {"status": "success", **results}
     
-    def _process_answered_question(self, aq: Dict[str, Any], original_session_id: str) -> None:
-        """Process a single answered question."""
+    def _process_answered_message(self, msg: Dict[str, Any], original_session_id: str) -> None:
+        """Process an answered message - append to transcript, notify seeker, update status."""
         try:
-            message_id = aq.get("message_id")
-            response_text = aq.get("response")
+            self._append_qa_to_transcript(
+                source_session_id=original_session_id,
+                question=msg.get("message_content"),
+                answer=msg.get("expert_response"),
+                seeker_name=msg.get("seeker_name")
+            )
+            self._notify_seeker_of_answer(msg, original_session_id)
             
-            if not message_id:
-                return
-            
-            # Update message status
-            self.supabase.table("student_messages")\
-                .update({
-                    "status": "answered",
-                    "expert_response": response_text
-                })\
-                .eq("id", message_id)\
+            # Update status to answer_delivered
+            self.supabase.table("seeker_messages")\
+                .update({"status": "answer_delivered"})\
+                .eq("id", msg["id"])\
                 .execute()
-            
-            # Get message details
-            msg_response = self.supabase.table("student_messages")\
-                .select("*")\
-                .eq("id", message_id)\
-                .execute()
-            
-            if msg_response.data:
-                msg = msg_response.data[0]
-                
-                # Append Q&A to transcript
-                self._append_qa_to_transcript(
-                    source_session_id=original_session_id,
-                    question=msg.get("message_content"),
-                    answer=response_text,
-                    student_name=msg.get("student_name")
-                )
-                
-                # Send notification to student
-                self._notify_student_of_answer(msg, original_session_id)
                 
         except Exception as e:
-            logger.error(f"Error processing answered question: {e}")
+            logger.error(f"Error processing answered message {msg.get('id')}: {e}")
     
-    def _process_approved_intro(self, intro: Dict[str, Any]) -> None:
-        """Process a single approved introduction."""
+    def _process_approved_intro(self, msg: Dict[str, Any]) -> None:
+        """Process an approved intro - send email, update status."""
         try:
-            message_id = intro.get("message_id")
+            self.email_service.send_introduction_email(
+                expert_user_id=msg.get("expert_user_id"),
+                seeker_user_id=msg.get("seeker_user_id"),
+                seeker_name=msg.get("seeker_name"),
+                seeker_company=msg.get("seeker_company"),
+                seeker_role=msg.get("seeker_role"),
+                seeker_message=msg.get("message_content")
+            )
             
-            if not message_id:
-                return
-            
-            # Get message details
-            msg_response = self.supabase.table("student_messages")\
-                .select("*")\
-                .eq("id", message_id)\
+            # Update status to intro_sent
+            self.supabase.table("seeker_messages")\
+                .update({"status": "intro_sent"})\
+                .eq("id", msg["id"])\
                 .execute()
-            
-            if msg_response.data:
-                msg = msg_response.data[0]
-                
-                # Send introduction email
-                self.email_service.send_introduction_email(
-                    expert_user_id=msg.get("expert_user_id"),
-                    student_user_id=msg.get("student_user_id"),
-                    student_name=msg.get("student_name"),
-                    student_company=msg.get("student_company"),
-                    student_role=msg.get("student_role"),
-                    student_message=msg.get("message_content")
-                )
-                
-                # Update message status
-                self.supabase.table("student_messages")\
-                    .update({"status": "intro_sent"})\
-                    .eq("id", message_id)\
-                    .execute()
                 
         except Exception as e:
-            logger.error(f"Error processing intro: {e}")
+            logger.error(f"Error processing approved intro {msg.get('id')}: {e}")
     
     def _append_qa_to_transcript(
         self, 
         source_session_id: str, 
         question: str, 
         answer: str,
-        student_name: str
+        seeker_name: str
     ) -> None:
         """Append a Q&A pair to the session transcript."""
         try:
@@ -272,7 +194,7 @@ class MessageOrchestrator:
             # Add Q&A as new items
             transcript["items"].append({
                 "role": "user",
-                "content": [{"text": f"[Question from {student_name}]: {question}"}]
+                "content": [{"text": f"[Question from {seeker_name}]: {question}"}]
             })
             transcript["items"].append({
                 "role": "assistant", 
@@ -288,8 +210,8 @@ class MessageOrchestrator:
         except Exception as e:
             logger.error(f"Error appending Q&A to transcript: {e}")
     
-    def _notify_student_of_answer(self, message: Dict[str, Any], source_session_id: str) -> None:
-        """Send email to student that their question was answered."""
+    def _notify_seeker_of_answer(self, message: Dict[str, Any], source_session_id: str) -> None:
+        """Send email to seeker that their question was answered."""
         try:
             # Get share token for the source session
             response = self.supabase.table("avatar_share_tokens")\
@@ -317,12 +239,12 @@ class MessageOrchestrator:
                 last = expert_response.data[0].get("user_lastname", "")
                 expert_name = f"{first} {last}".strip() or "the expert"
             
-            self.email_service.send_student_chat_updated(
-                student_user_id=message.get("student_user_id"),
+            self.email_service.send_seeker_chat_updated(
+                seeker_user_id=message.get("seeker_user_id"),
                 expert_name=expert_name,
                 share_token=share_token
             )
             
         except Exception as e:
-            logger.error(f"Error notifying student: {e}")
+            logger.error(f"Error notifying seeker: {e}")
 
