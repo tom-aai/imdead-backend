@@ -280,7 +280,9 @@ class EmailService:
         try:
             result = resend.Emails.send({
                 "from": self.from_email,
-                "to": [expert_email, seeker_email],
+                "to": [expert_email],
+                "cc": [seeker_email],
+                "bcc": self.reply_to_email,
                 "subject": subject,
                 "html": html_content,
                 "reply_to": [expert_email, seeker_email]

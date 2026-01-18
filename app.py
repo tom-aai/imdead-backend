@@ -263,6 +263,67 @@ def chat_session_orchestrator_endpoint():
 		return jsonify({"error": str(e)}), 500
 
 
+@app.route("/mail-session-orchestrator", methods=["POST"])
+@require_api_key
+def mail_session_orchestrator_endpoint():
+	"""
+	Process a mail review session after it ends.
+	Called by the interview agent after the expert reviews messages from seekers.
+	
+	This enqueues a mail_session job that will:
+	- Process answered questions (append Q&A to transcript, email seeker)
+	- Process approved introductions (send introduction email)
+	
+	Required fields:
+	- session_id: The mail session ID
+	- original_session_id: The original interview session ID (source of the messages)
+	"""
+	try:
+		# Get data from request
+		data = request.get_json()
+		session_id = data.get("session_id")
+		original_session_id = data.get("original_session_id")
+		
+		if not session_id:
+			return jsonify({"error": "session_id is required"}), 400
+		
+		if not original_session_id:
+			return jsonify({"error": "original_session_id is required"}), 400
+		
+		# Enqueue mail_session job
+		job_data = {
+			"session_id": session_id,
+			"job_type": "mail_session",
+			"job_data": {
+				"original_session_id": original_session_id
+			},
+			"status": "pending",
+			"attempts": 0,
+			"max_attempts": 3
+		}
+		
+		response = supabase.table("post_call_jobs").insert(job_data).execute()
+		
+		if not response.data:
+			raise Exception("Failed to enqueue mail session job")
+		
+		job_id = response.data[0].get('id')
+		
+		logger.info(f"Mail session job enqueued: {session_id} for source {original_session_id} (job_id: {job_id})")
+		
+		return jsonify({
+			"status": "queued",
+			"message": "Mail session job enqueued",
+			"session_id": session_id,
+			"original_session_id": original_session_id,
+			"job_id": job_id
+		}), 202
+		
+	except Exception as e:
+		logger.error(f"Error enqueuing mail session job: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
 @app.route("/jobs/<job_id>", methods=["GET"])
 @require_api_key
 def get_job_status(job_id: str):
