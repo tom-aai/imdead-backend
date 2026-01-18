@@ -27,7 +27,9 @@ class EmailService:
         """
         self.supabase = supabase_client
         self.resend_api_key = resend_api_key or os.getenv("RESEND_API_KEY")
-        self.from_email = from_email or os.getenv("RESEND_FROM_EMAIL", "noreply@expertavatar.com")
+        default_from = "Expert Avatar <hello@notifications.melochora.com>"
+        self.from_email = from_email or os.getenv("RESEND_FROM_EMAIL", default_from)
+        self.reply_to_email = os.getenv("SUPPORT_EMAIL", "support@melochora.com")
         self.app_url = os.getenv("APP_URL", "https://expertavatar.com")
         
         if self.resend_api_key:
@@ -74,15 +76,15 @@ class EmailService:
         session_info = self._get_session_info(session_id)
         topic = session_info.get("main_topic", "your expertise") if session_info else "your expertise"
         
-        subject = f"You have {message_count} new message{'s' if message_count > 1 else ''} for your expert avatar."
+        subject = f"You have {message_count} new message{'s' if message_count > 1 else ''} for your Expert Avatar."
         
         html_content = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #1a1a1a;">Hi {expert_name},</h2>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                You have <strong>{message_count} new message{'s' if message_count > 1 else ''}</strong> from people 
-                who chatted with your expert avatar about <strong>{topic}</strong>.
+                You have {message_count} new message{'s' if message_count > 1 else ''} from people 
+                who chatted with your Expert Avatar about {topic}.
             </p>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
@@ -110,6 +112,7 @@ class EmailService:
                 "to": [expert_email],
                 "subject": subject,
                 "html": html_content,
+                "reply_to": self.reply_to_email,
                 "headers": {
                     "X-Idempotency-Key": idempotency_key
                 }
@@ -154,19 +157,19 @@ class EmailService:
         
         chat_url = f"{self.app_url}/chat/{share_token}"
         
-        subject = f"{expert_name}'s avatar has new answers for you"
+        subject = f"{expert_name}'s Expert Avatar has new answers for you"
         
         html_content = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #1a1a1a;">Hi {seeker_name},</h2>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                Great news! <strong>{expert_name}</strong> has responded to your questions.
-                Their expert avatar has been updated with new knowledge.
+                {expert_name} has responded to your questions.
+                Their Expert Avatar has been updated with new knowledge.
             </p>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                Chat with the avatar again to get your answers.
+                Chat with {expert_name}'s Expert Avatar again to get your answers.
             </p>
             
             <a href="{chat_url}" 
@@ -241,19 +244,18 @@ class EmailService:
         elif seeker_company:
             seeker_context = f"{seeker_name} from {seeker_company}"
         
-        subject = f"Introduction: {seeker_name} would like to connect"
+        subject = f"Expert Avatar Introduction: {expert_name} meet {seeker_name}"
         
         html_content = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #1a1a1a;">Introduction</h2>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                Hi {expert_name} and {seeker_name},
+                Hi {expert_name},
             </p>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                I'm connecting you two! {seeker_name} chatted with {expert_name}'s avatar and 
-                requested an introduction.
+                I told you about {seeker_name} (cc'ed). You agreed to connect with them so I'm putting you two in contact.
             </p>
             
             <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
@@ -269,12 +271,9 @@ class EmailService:
             </div>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                Feel free to take the conversation from here!
+                I'll let you take it from here.
             </p>
             
-            <p style="color: #666; font-size: 14px; margin-top: 30px;">
-                This introduction was made via Expert Avatar.
-            </p>
         </div>
         """
         
