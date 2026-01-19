@@ -4,16 +4,17 @@ Handles post-call transcript analysis and processing.
 """
 
 import json
-import logging
 import os
+import time
 from anthropic import Anthropic
 import sys
 
 # Add parent directory to path to import utils
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils import load_prompt
+from services.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TranscriptProcessor:
@@ -195,6 +196,16 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 		# Replace placeholders with actual data
 		prompt = prompt_template.replace('{metadata}', metadata).replace('{transcript}', transcript)
 		
+		logger.info(
+			"Anthropic LLM call started: transcript_analysis",
+			service="Anthropic",
+			operation="transcript_analysis",
+			model="claude-3-5-haiku-20241022",
+			transcript_length=len(transcript)
+		)
+		
+		llm_start = time.time()
+		
 		# Call Claude API
 		message = self.anthropic.messages.create(
 			model="claude-3-5-haiku-20241022",
@@ -205,6 +216,16 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 					"content": prompt
 				}
 			]
+		)
+		
+		duration_ms = int((time.time() - llm_start) * 1000)
+		logger.info(
+			"Anthropic LLM call completed: transcript_analysis",
+			service="Anthropic",
+			operation="transcript_analysis",
+			duration_ms=duration_ms,
+			input_tokens=message.usage.input_tokens if hasattr(message, 'usage') else None,
+			output_tokens=message.usage.output_tokens if hasattr(message, 'usage') else None
 		)
 		
 		response_text = message.content[0].text

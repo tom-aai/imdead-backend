@@ -3,14 +3,16 @@ Email service using Resend for transactional emails.
 Handles expert notifications, student notifications, and introduction emails.
 """
 
-import logging
 import os
+import time
 from typing import Optional, Dict, Any
 from datetime import datetime, UTC
 
 import resend
 
-logger = logging.getLogger(__name__)
+from services.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class EmailService:
@@ -107,6 +109,15 @@ class EmailService:
             # Use idempotency key to prevent duplicate emails
             idempotency_key = f"expert-notification-{expert_user_id}-{session_id}-{datetime.now(UTC).strftime('%Y%m%d%H')}"
             
+            logger.info(
+                "Resend email started: expert_notification",
+                service="Resend",
+                operation="send_expert_notification",
+                email_type="expert_notification",
+                recipient_domain=expert_email.split('@')[1] if '@' in expert_email else 'unknown'
+            )
+            
+            send_start = time.time()
             result = resend.Emails.send({
                 "from": self.from_email,
                 "to": [expert_email],
@@ -118,11 +129,25 @@ class EmailService:
                 }
             })
             
-            logger.info(f"Sent expert notification to {expert_email}")
+            duration_ms = int((time.time() - send_start) * 1000)
+            logger.info(
+                "Resend email completed: expert_notification",
+                service="Resend",
+                operation="send_expert_notification",
+                email_type="expert_notification",
+                duration_ms=duration_ms,
+                status="sent"
+            )
             return {"status": "sent", "email_id": result.get("id")}
             
         except Exception as e:
-            logger.error(f"Error sending expert notification: {e}")
+            logger.error(
+                f"Resend email failed: expert_notification - {e}",
+                service="Resend",
+                operation="send_expert_notification",
+                email_type="expert_notification",
+                error=str(e)
+            )
             return {"status": "error", "error": str(e)}
     
     def send_seeker_chat_updated(
@@ -181,6 +206,14 @@ class EmailService:
         """
         
         try:
+            logger.info(
+                "Resend email started: seeker_chat_updated",
+                service="Resend",
+                operation="send_seeker_chat_updated",
+                email_type="seeker_chat_updated"
+            )
+            
+            send_start = time.time()
             result = resend.Emails.send({
                 "from": self.from_email,
                 "to": [seeker_email],
@@ -188,11 +221,25 @@ class EmailService:
                 "html": html_content
             })
             
-            logger.info(f"Sent chat update notification to {seeker_email}")
+            duration_ms = int((time.time() - send_start) * 1000)
+            logger.info(
+                "Resend email completed: seeker_chat_updated",
+                service="Resend",
+                operation="send_seeker_chat_updated",
+                email_type="seeker_chat_updated",
+                duration_ms=duration_ms,
+                status="sent"
+            )
             return {"status": "sent", "email_id": result.get("id")}
             
         except Exception as e:
-            logger.error(f"Error sending seeker notification: {e}")
+            logger.error(
+                f"Resend email failed: seeker_chat_updated - {e}",
+                service="Resend",
+                operation="send_seeker_chat_updated",
+                email_type="seeker_chat_updated",
+                error=str(e)
+            )
             return {"status": "error", "error": str(e)}
     
     def send_introduction_email(
@@ -278,6 +325,14 @@ class EmailService:
         """
         
         try:
+            logger.info(
+                "Resend email started: introduction",
+                service="Resend",
+                operation="send_introduction_email",
+                email_type="introduction"
+            )
+            
+            send_start = time.time()
             result = resend.Emails.send({
                 "from": self.from_email,
                 "to": [expert_email],
@@ -288,11 +343,25 @@ class EmailService:
                 "reply_to": [expert_email, seeker_email]
             })
             
-            logger.info(f"Sent introduction email connecting {expert_email} and {seeker_email}")
+            duration_ms = int((time.time() - send_start) * 1000)
+            logger.info(
+                "Resend email completed: introduction",
+                service="Resend",
+                operation="send_introduction_email",
+                email_type="introduction",
+                duration_ms=duration_ms,
+                status="sent"
+            )
             return {"status": "sent", "email_id": result.get("id")}
             
         except Exception as e:
-            logger.error(f"Error sending introduction email: {e}")
+            logger.error(
+                f"Resend email failed: introduction - {e}",
+                service="Resend",
+                operation="send_introduction_email",
+                email_type="introduction",
+                error=str(e)
+            )
             return {"status": "error", "error": str(e)}
     
     def _is_email_enabled(self, user_id: str) -> bool:

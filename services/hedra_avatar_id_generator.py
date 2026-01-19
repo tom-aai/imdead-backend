@@ -4,14 +4,16 @@ Handles post-call avatar creation using Hedra API.
 """
 
 import json
-import logging
 import os
+import time
 import tempfile
 import requests
 from pathlib import Path
 import sys
 
-logger = logging.getLogger(__name__)
+from services.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class HedraAvatarGenerator:
@@ -215,11 +217,17 @@ class HedraAvatarGenerator:
             "X-API-Key": self.hedra_api_key
         }
         
+        upload_start_time = time.time()
+        
         try:
             # Step 1: Create asset with generic name
             avatar_name = "user_avatar"
             
-            logger.debug(f"Creating Hedra asset with name: {avatar_name}")
+            logger.info(
+                "Hedra asset creation started",
+                service="Hedra",
+                operation="create_asset"
+            )
             
             create_response = requests.post(
                 hedra_base_url,
@@ -232,7 +240,12 @@ class HedraAvatarGenerator:
             )
             
             if create_response.status_code != 200:
-                logger.error(f"Hedra asset creation failed: {create_response.status_code} - {create_response.text}")
+                logger.error(
+                    f"Hedra asset creation failed: {create_response.status_code}",
+                    service="Hedra",
+                    operation="create_asset",
+                    status_code=create_response.status_code
+                )
                 raise Exception(f"Failed to create Hedra asset: {create_response.status_code}")
             
             asset_data = create_response.json()
@@ -241,12 +254,22 @@ class HedraAvatarGenerator:
             if not asset_id:
                 raise Exception("No asset ID returned from Hedra API")
             
-            logger.debug(f"Created Hedra asset with ID: {asset_id}")
+            logger.info(
+                "Hedra asset created",
+                service="Hedra",
+                operation="create_asset",
+                asset_id=asset_id
+            )
             
             # Step 2: Upload image to the asset
             upload_url = f"{hedra_base_url}/{asset_id}/upload"
             
-            logger.debug(f"Uploading image to Hedra asset {asset_id}")
+            logger.info(
+                "Hedra image upload started",
+                service="Hedra",
+                operation="upload_image",
+                asset_id=asset_id
+            )
             
             with open(image_path, 'rb') as image_file:
                 files = {
@@ -260,18 +283,43 @@ class HedraAvatarGenerator:
                 )
             
             if upload_response.status_code != 200:
-                logger.error(f"Hedra image upload failed: {upload_response.status_code} - {upload_response.text}")
+                logger.error(
+                    f"Hedra image upload failed: {upload_response.status_code}",
+                    service="Hedra",
+                    operation="upload_image",
+                    status_code=upload_response.status_code
+                )
                 raise Exception(f"Failed to upload image to Hedra: {upload_response.status_code}")
             
-            logger.debug(f"Successfully uploaded image to Hedra (asset_id: {asset_id})")
+            duration_ms = int((time.time() - upload_start_time) * 1000)
+            logger.info(
+                "Hedra image upload completed",
+                service="Hedra",
+                operation="upload_image",
+                asset_id=asset_id,
+                duration_ms=duration_ms,
+                status="success"
+            )
             
             return asset_id
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"Hedra API request failed: {e}")
+            duration_ms = int((time.time() - upload_start_time) * 1000)
+            logger.error(
+                f"Hedra API request failed: {e}",
+                service="Hedra",
+                duration_ms=duration_ms,
+                error=str(e)
+            )
             raise Exception(f"Hedra API error: {e}")
         except Exception as e:
-            logger.error(f"Failed to upload to Hedra: {e}")
+            duration_ms = int((time.time() - upload_start_time) * 1000)
+            logger.error(
+                f"Failed to upload to Hedra: {e}",
+                service="Hedra",
+                duration_ms=duration_ms,
+                error=str(e)
+            )
             raise
     
     def _update_user_avatar_images(

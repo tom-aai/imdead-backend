@@ -4,7 +4,6 @@ Voice cloning service.
 
 import base64
 import os
-import logging
 import tempfile
 import time
 import torch
@@ -13,7 +12,9 @@ from pydub import AudioSegment
 import numpy as np
 from cartesia import Cartesia
 
-logger = logging.getLogger(__name__)
+from services.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def _truncate_for_logging(text: str, max_length: int = 500) -> str:
@@ -600,12 +601,20 @@ class VoiceCloningService:
         Raises:
             Exception: If cloning fails
         """
+        clone_start_time = time.time()
+        
         try:
             if not os.path.exists(audio_file_path):
                 raise FileNotFoundError(f"Audio file not found at: {audio_file_path}")
             
             voice_name = user_id
             
+            logger.info(
+                "Cartesia voice clone started",
+                service="Cartesia",
+                operation="clone_voice",
+                user_id=user_id
+            )
             
             # Clone the voice using Cartesia SDK
             with open(audio_file_path, "rb") as file_handle:
@@ -621,9 +630,29 @@ class VoiceCloningService:
             # Extract voice ID from response (VoiceMetadata object)
             voice_id = response.id
             
+            duration_ms = int((time.time() - clone_start_time) * 1000)
+            logger.info(
+                "Cartesia voice clone completed",
+                service="Cartesia",
+                operation="clone_voice",
+                user_id=user_id,
+                voice_id=voice_id,
+                duration_ms=duration_ms,
+                status="success"
+            )
+            
             return voice_id
             
         except Exception as e:
+            duration_ms = int((time.time() - clone_start_time) * 1000)
+            logger.error(
+                f"Cartesia voice clone failed: {e}",
+                service="Cartesia",
+                operation="clone_voice",
+                user_id=user_id,
+                duration_ms=duration_ms,
+                error=str(e)
+            )
             raise Exception(f"Cartesia voice cloning failed: {e}")
     
     def _clone_voice_with_inworld(
@@ -690,6 +719,14 @@ class VoiceCloningService:
         
         last_error = None
         
+        logger.info(
+            "Inworld voice clone started",
+            service="Inworld",
+            operation="clone_voice",
+            user_id=user_id
+        )
+        clone_start_time = time.time()
+        
         for attempt in range(max_retries + 1):
             try:
                 response = requests.post(
@@ -710,13 +747,29 @@ class VoiceCloningService:
                         truncated_result = _truncate_for_logging(str(result))
                         raise Exception(f"No voiceId in Inworld response: {truncated_result}")
                     
+                    duration_ms = int((time.time() - clone_start_time) * 1000)
+                    logger.info(
+                        "Inworld voice clone completed",
+                        service="Inworld",
+                        operation="clone_voice",
+                        user_id=user_id,
+                        voice_id=voice_id,
+                        duration_ms=duration_ms,
+                        status="success"
+                    )
                     return voice_id
                 
                 # Handle rate limiting with exponential backoff
                 if response.status_code == 429:
                     if attempt < max_retries:
                         delay = base_delay * (2 ** attempt)
-                        logger.warning(f"Rate limited, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries + 1})")
+                        logger.warning(
+                            f"Inworld rate limited, retrying in {delay:.0f}s",
+                            service="Inworld",
+                            attempt=attempt + 1,
+                            max_attempts=max_retries + 1,
+                            retry_delay_s=delay
+                        )
                         time.sleep(delay)
                         continue
                     else:
@@ -728,7 +781,14 @@ class VoiceCloningService:
                 
             except requests.exceptions.RequestException as e:
                 # Network/timeout errors - could retry but let's fail fast for now
-                logger.error(f"Inworld API request failed: {e}")
+                duration_ms = int((time.time() - clone_start_time) * 1000)
+                logger.error(
+                    f"Inworld API request failed: {e}",
+                    service="Inworld",
+                    operation="clone_voice",
+                    duration_ms=duration_ms,
+                    error=str(e)
+                )
                 last_error = e
                 raise Exception(f"Voice cloning request failed: {e}")
         

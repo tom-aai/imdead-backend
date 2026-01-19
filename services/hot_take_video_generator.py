@@ -8,7 +8,6 @@ This service generates videos from hot takes:
 """
 
 import os
-import logging
 import tempfile
 import time
 import json
@@ -21,8 +20,9 @@ from cartesia import Cartesia
 
 # Import CaptionGenerator for adding captions
 from .caption_generator import CaptionGenerator
+from .logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Hedra Character-3 model ID
 CHARACTER_3_MODEL_ID = "d1dd37a3-e39a-4854-a298-6510289f9cf2"
@@ -436,8 +436,15 @@ class HotTakeVideoGenerationService:
         Raises:
             Exception: If audio generation fails
         """
+        tts_start = time.time()
+        
         try:
-            logger.info(f"Generating audio with Cartesia SSE (voice: {voice_id})")
+            logger.info(
+                "Cartesia TTS generation started",
+                service="Cartesia",
+                operation="tts_generate",
+                text_length=len(text)
+            )
             
             # Prepare SSE request
             url = "https://api.cartesia.ai/tts/sse"
@@ -553,12 +560,28 @@ class HotTakeVideoGenerationService:
                 wav_file.setframerate(44100)  # Sample rate
                 wav_file.writeframes(raw_audio)
             
-            logger.debug(f"Audio saved to {output_path}")
+            duration_ms = int((time.time() - tts_start) * 1000)
+            logger.info(
+                "Cartesia TTS generation completed",
+                service="Cartesia",
+                operation="tts_generate",
+                duration_ms=duration_ms,
+                audio_bytes=len(raw_audio),
+                word_count=len(word_timestamps),
+                status="success"
+            )
             
             return output_path, word_timestamps
             
         except Exception as e:
-            logger.error(f"Failed to generate audio with Cartesia: {e}")
+            duration_ms = int((time.time() - tts_start) * 1000)
+            logger.error(
+                f"Cartesia TTS generation failed: {e}",
+                service="Cartesia",
+                operation="tts_generate",
+                duration_ms=duration_ms,
+                error=str(e)
+            )
             raise Exception(f"Audio generation failed: {e}")
     
     def _generate_audio_with_inworld(
@@ -581,8 +604,15 @@ class HotTakeVideoGenerationService:
         Raises:
             Exception: If audio generation fails
         """
+        tts_start = time.time()
+        
         try:
-            logger.info(f"Generating audio with Inworld TTS (voice: {voice_id})")
+            logger.info(
+                "Inworld TTS generation started",
+                service="Inworld",
+                operation="tts_generate",
+                text_length=len(text)
+            )
             
             if not self.inworld_api_key:
                 raise ValueError("Inworld API key not configured")
@@ -655,12 +685,28 @@ class HotTakeVideoGenerationService:
             with open(output_path, 'wb') as f:
                 f.write(audio_bytes)
             
-            logger.debug(f"Audio saved to {output_path}")
+            duration_ms = int((time.time() - tts_start) * 1000)
+            logger.info(
+                "Inworld TTS generation completed",
+                service="Inworld",
+                operation="tts_generate",
+                duration_ms=duration_ms,
+                audio_bytes=len(audio_bytes),
+                word_count=len(word_timestamps),
+                status="success"
+            )
             
             return output_path, word_timestamps
             
         except Exception as e:
-            logger.error(f"Failed to generate audio with Inworld: {e}")
+            duration_ms = int((time.time() - tts_start) * 1000)
+            logger.error(
+                f"Inworld TTS generation failed: {e}",
+                service="Inworld",
+                operation="tts_generate",
+                duration_ms=duration_ms,
+                error=str(e)
+            )
             raise Exception(f"Audio generation failed: {e}")
     
     def _generate_video_with_hedra(
@@ -689,8 +735,16 @@ class HotTakeVideoGenerationService:
         Raises:
             Exception: If video generation fails
         """
+        video_start = time.time()
+        
         try:
-            logger.info(f"Generating video with Hedra for hot take")
+            logger.info(
+                "Hedra video generation started",
+                service="Hedra",
+                operation="generate_video",
+                avatar_id=hedra_avatar_id,
+                resolution=resolution
+            )
             
             # Initialize Hedra session
             session = HedraSession(api_key=self.hedra_api_key)
@@ -737,11 +791,25 @@ class HotTakeVideoGenerationService:
             except Exception as e:
                 logger.warning(f"Failed to clean up raw video: {e}")
             
-            logger.debug(f"Video cropped and saved to {output_filename}")
+            duration_ms = int((time.time() - video_start) * 1000)
+            logger.info(
+                "Hedra video generation completed",
+                service="Hedra",
+                operation="generate_video",
+                duration_ms=duration_ms,
+                status="success"
+            )
             return output_filename
             
         except Exception as e:
-            logger.error(f"Failed to generate video with Hedra: {e}")
+            duration_ms = int((time.time() - video_start) * 1000)
+            logger.error(
+                f"Hedra video generation failed: {e}",
+                service="Hedra",
+                operation="generate_video",
+                duration_ms=duration_ms,
+                error=str(e)
+            )
             raise Exception(f"Video generation failed: {e}")
     
     def _upload_audio_file(self, session: HedraSession, audio_path: str) -> str:

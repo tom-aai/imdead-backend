@@ -1,20 +1,30 @@
 import os
-import logging
+import time
 import threading
 import uuid
 from functools import wraps
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, g
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
 from services.hedra_avatar_id_generator import HedraAvatarGenerator
 from services.voice_cloner import VoiceCloningService
+from services.logging_config import (
+	configure_logging,
+	get_logger,
+	set_request_context,
+	clear_context
+)
 
 # Load environment variables: prefer .env.local, fallback to default .env if present
 _loaded = load_dotenv(".env.local")
 if not _loaded:
 	load_dotenv()
+
+# Configure structured logging
+configure_logging()
+logger = get_logger(__name__)
 
 app = Flask(__name__)
 
@@ -29,25 +39,79 @@ def require_api_key(f):
 		if not BACKEND_API_KEY:
 			if FLASK_ENV == "development":
 				# Allow unauthenticated requests in local development
-				logging.warning("BACKEND_API_KEY not configured - allowing request (development mode)")
+				logger.warning("BACKEND_API_KEY not configured - allowing request (development mode)")
 				return f(*args, **kwargs)
 			else:
 				# Reject in production if API key is not configured
-				logging.error("BACKEND_API_KEY not configured - rejecting request")
+				logger.error("BACKEND_API_KEY not configured - rejecting request")
 				return jsonify({"error": "Server misconfigured"}), 500
 		
 		api_key = request.headers.get('X-API-Key')
 		if not api_key or api_key != BACKEND_API_KEY:
+			logger.warning("Unauthorized request - invalid or missing API key")
 			return jsonify({"error": "Unauthorized"}), 401
 		return f(*args, **kwargs)
 	return decorated
 
-# Configure logging
-logging.basicConfig(
-	level=logging.INFO,
-	format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Request logging middleware
+@app.before_request
+def before_request():
+	"""Log incoming requests and set up context for tracing."""
+	g.start_time = time.time()
+	
+	# Extract context from request
+	user_id = None
+	session_id = None
+	
+	# Try to get user_id and session_id from JSON body
+	if request.is_json:
+		data = request.get_json(silent=True) or {}
+		session_id = data.get('session_id')
+		user_id = data.get('user_id')
+	
+	# Try to get from form data
+	if not user_id:
+		user_id = request.form.get('user_id')
+	if not session_id:
+		session_id = request.form.get('session_id')
+	
+	# Set logging context
+	request_id = set_request_context(
+		user_id=user_id,
+		session_id=session_id
+	)
+	g.request_id = request_id
+	
+	# Log request start (skip health checks to reduce noise)
+	if request.path not in ('/', '/health'):
+		logger.info(
+			f"Request started: {request.method} {request.path}",
+			method=request.method,
+			path=request.path
+		)
+
+
+@app.after_request
+def after_request(response):
+	"""Log request completion with timing."""
+	# Skip health checks
+	if request.path in ('/', '/health'):
+		return response
+	
+	duration_ms = int((time.time() - g.get('start_time', time.time())) * 1000)
+	
+	logger.info(
+		f"Request completed: {request.method} {request.path}",
+		method=request.method,
+		path=request.path,
+		status=response.status_code,
+		duration_ms=duration_ms
+	)
+	
+	# Clear context after request
+	clear_context()
+	
+	return response
 
 # Initialize Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")

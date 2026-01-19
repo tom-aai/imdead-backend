@@ -4,16 +4,17 @@ Aggregates user profile data from all past interview call analyses.
 """
 
 import json
-import logging
 import os
+import time
 from anthropic import Anthropic
 import sys
 
 # Add parent directory to path to import utils
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils import load_prompt
+from services.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ProfileAggregator:

@@ -14,7 +14,6 @@ Run this as a separate service (e.g., Render Background Worker):
 import os
 import sys
 import time
-import logging
 import asyncio
 from datetime import datetime, UTC
 from dotenv import load_dotenv
@@ -27,26 +26,21 @@ from services.voice_cloner import VoiceCloningService
 from services.transcript_processor import TranscriptProcessor
 from services.email_service import EmailService
 from services.message_orchestrator import MessageOrchestrator
+from services.logging_config import (
+    configure_logging,
+    get_logger,
+    set_job_context,
+    clear_context
+)
 
 # Load environment variables: prefer .env.local, fallback to default .env if present
 _loaded = load_dotenv(".env.local")
 if not _loaded:
     load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
-
-# Suppress verbose HTTP library logging that can swamp logs with large payloads
-logging.getLogger("urllib3").setLevel(logging.WARNING)
-logging.getLogger("requests").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+# Configure structured logging
+configure_logging()
+logger = get_logger(__name__)
 
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -126,8 +120,22 @@ class JobWorker:
         job_type = job.get('job_type', 'post_call')  # Default to 'post_call' for backward compatibility
         job_data = job.get('job_data') or {}
         attempts = job['attempts']
+        user_id = job_data.get('user_id')
         
-        logger.info(f"Processing {job_type} job {job_id} for session {session_id} (attempt {attempts + 1})")
+        # Set job context for all subsequent log messages
+        set_job_context(
+            job_id=str(job_id),
+            user_id=user_id,
+            session_id=session_id
+        )
+        
+        start_time = time.time()
+        logger.info(
+            f"Job processing started: {job_type}",
+            job_type=job_type,
+            attempt=attempts + 1,
+            max_attempts=job['max_attempts']
+        )
         
         try:
             # Route based on job_type
@@ -197,6 +205,7 @@ class JobWorker:
                 result = asyncio.run(self.orchestrator.process_call_completion(session_id))
             
             # Mark job as completed
+            duration_ms = int((time.time() - start_time) * 1000)
             self.supabase.table('post_call_jobs')\
                 .update({
                     'status': 'completed',
@@ -206,10 +215,22 @@ class JobWorker:
                 .eq('id', job_id)\
                 .execute()
             
-            logger.info(f"Job {job_id} ({job_type}) completed successfully")
+            logger.info(
+                f"Job completed successfully: {job_type}",
+                job_type=job_type,
+                duration_ms=duration_ms,
+                status="completed"
+            )
             
         except Exception as e:
-            logger.error(f"Job {job_id} ({job_type}) failed with error: {e}", exc_info=True)
+            duration_ms = int((time.time() - start_time) * 1000)
+            logger.error(
+                f"Job failed: {job_type} - {e}",
+                job_type=job_type,
+                duration_ms=duration_ms,
+                error=str(e),
+                exc_info=True
+            )
             
             # Increment attempts
             new_attempts = attempts + 1
@@ -217,7 +238,12 @@ class JobWorker:
             
             if new_attempts >= max_attempts:
                 # Max retries reached, mark as permanently failed
-                logger.error(f"Job {job_id} failed permanently after {new_attempts} attempts")
+                logger.error(
+                    f"Job failed permanently after {new_attempts} attempts",
+                    job_type=job_type,
+                    attempts=new_attempts,
+                    status="failed"
+                )
                 self.supabase.table('post_call_jobs')\
                     .update({
                         'status': 'failed',
@@ -229,7 +255,13 @@ class JobWorker:
                     .execute()
             else:
                 # Retry - mark back as pending with exponential backoff
-                logger.warning(f"Job {job_id} will be retried (attempt {new_attempts}/{max_attempts})")
+                logger.warning(
+                    f"Job will be retried",
+                    job_type=job_type,
+                    attempt=new_attempts,
+                    max_attempts=max_attempts,
+                    status="retry_pending"
+                )
                 self.supabase.table('post_call_jobs')\
                     .update({
                         'status': 'pending',
@@ -239,6 +271,10 @@ class JobWorker:
                     })\
                     .eq('id', job_id)\
                     .execute()
+        
+        finally:
+            # Clear job context after processing
+            clear_context()
     
     def claim_job(self) -> dict | None:
         """
@@ -254,13 +290,20 @@ class JobWorker:
             if response.data and len(response.data) > 0:
                 job = response.data[0]
                 job_type = job.get('job_type', 'post_call')
-                logger.debug(f"Claimed {job_type} job {job['id']} for session {job['session_id']}")
+                job_data = job.get('job_data') or {}
+                logger.info(
+                    f"Job claimed: {job_type}",
+                    job_id=job['id'],
+                    job_type=job_type,
+                    session_id=job['session_id'],
+                    user_id=job_data.get('user_id')
+                )
                 return job
             
             return None
             
         except Exception as e:
-            logger.error(f"Error claiming job: {e}")
+            logger.error(f"Error claiming job: {e}", error=str(e))
             return None
     
     def reset_stuck_jobs(self) -> None:
@@ -271,10 +314,14 @@ class JobWorker:
             }).execute()
             
             if response.data and response.data > 0:
-                logger.warning(f"Reset {response.data} stuck job(s)")
+                logger.warning(
+                    f"Reset {response.data} stuck job(s)",
+                    stuck_jobs_reset=response.data,
+                    timeout_minutes=STUCK_JOB_TIMEOUT
+                )
                 
         except Exception as e:
-            logger.error(f"Error resetting stuck jobs: {e}")
+            logger.error(f"Error resetting stuck jobs: {e}", error=str(e))
     
     def run(self) -> None:
         """Main worker loop - continuously processes jobs from the queue."""

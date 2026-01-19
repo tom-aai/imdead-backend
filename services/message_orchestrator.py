@@ -4,11 +4,12 @@ Handles message notification processing and mail session post-processing.
 """
 
 import json
-import logging
 from datetime import datetime, UTC
 from typing import Dict, Any, List
 
-logger = logging.getLogger(__name__)
+from services.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class MessageOrchestrator:
@@ -36,7 +37,7 @@ class MessageOrchestrator:
         Returns:
             dict: Result with counts of notifications sent
         """
-        logger.info("Processing message notifications...")
+        logger.info("Processing message notifications started")
         
         # Find experts with pending messages that haven't been notified
         response = self.supabase.table("seeker_messages")\
@@ -46,6 +47,7 @@ class MessageOrchestrator:
             .execute()
         
         if not response.data:
+            logger.info("No pending message notifications to process")
             return {"status": "success", "notifications_sent": 0, "message": "No pending notifications"}
         
         # Group by expert and source session
@@ -53,6 +55,12 @@ class MessageOrchestrator:
         for row in response.data:
             key = (row["expert_user_id"], row["source_session_id"])
             notifications[key] = notifications.get(key, 0) + 1
+        
+        logger.info(
+            f"Found {len(notifications)} expert(s) to notify",
+            experts_count=len(notifications),
+            total_messages=len(response.data)
+        )
         
         sent_count = 0
         for (expert_user_id, source_session_id), message_count in notifications.items():
@@ -75,8 +83,16 @@ class MessageOrchestrator:
                     sent_count += 1
                     
             except Exception as e:
-                logger.error(f"Error sending notification to expert {expert_user_id}: {e}")
+                logger.error(
+                    f"Error sending notification to expert: {e}",
+                    expert_user_id=expert_user_id,
+                    error=str(e)
+                )
         
+        logger.info(
+            f"Message notifications completed: {sent_count} sent",
+            notifications_sent=sent_count
+        )
         return {"status": "success", "notifications_sent": sent_count}
     
     def process_mail_session(self, session_id: str, job_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -99,7 +115,11 @@ class MessageOrchestrator:
         if not original_session_id:
             raise ValueError("mail_session job requires original_session_id in job_data")
         
-        logger.info(f"Processing mail session {session_id} for source {original_session_id}")
+        logger.info(
+            f"Processing mail session started",
+            mail_session_id=session_id,
+            source_session_id=original_session_id
+        )
         
         # Query for messages needing backend processing
         # These were updated by the MailAgent's handle_message tool
@@ -108,6 +128,12 @@ class MessageOrchestrator:
             .eq("source_session_id", original_session_id)\
             .in_("status", ["answered", "intro_approved"])\
             .execute()
+        
+        message_count = len(messages.data) if messages.data else 0
+        logger.info(
+            f"Found {message_count} messages to process",
+            messages_count=message_count
+        )
         
         answered_count = 0
         intros_count = 0
@@ -119,6 +145,12 @@ class MessageOrchestrator:
             elif msg["status"] == "intro_approved":
                 self._process_approved_intro(msg)
                 intros_count += 1
+        
+        logger.info(
+            f"Mail session processing completed",
+            answered_processed=answered_count,
+            intros_processed=intros_count
+        )
         
         return {
             "status": "success",

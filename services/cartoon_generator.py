@@ -4,14 +4,16 @@ Transforms user portrait images into editorial illustration style using Google G
 """
 
 import os
-import logging
+import time
 import tempfile
 from pathlib import Path
 from google import genai
 from google.genai import types
 from PIL import Image
 
-logger = logging.getLogger(__name__)
+from services.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class CartoonGenerator:
@@ -194,8 +196,15 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
         Raises:
             Exception: If transformation fails
         """
+        transform_start = time.time()
+        
         try:
-            logger.debug(f"Transforming image with Google Gemini")
+            logger.info(
+                "Google Gemini image transformation started",
+                service="Google",
+                operation="cartoonize_image",
+                model="gemini-2.5-flash-image"
+            )
             
             # Load and preprocess the image
             image = Image.open(image_path)
@@ -246,11 +255,25 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
             temp_file.close()
             generated_image.save(temp_file.name)
             
-            logger.debug(f"Image transformation completed successfully")
+            duration_ms = int((time.time() - transform_start) * 1000)
+            logger.info(
+                "Google Gemini image transformation completed",
+                service="Google",
+                operation="cartoonize_image",
+                duration_ms=duration_ms,
+                status="success"
+            )
             return temp_file.name
             
         except Exception as e:
-            logger.error(f"Failed to transform image with Gemini: {e}")
+            duration_ms = int((time.time() - transform_start) * 1000)
+            logger.error(
+                f"Google Gemini image transformation failed: {e}",
+                service="Google",
+                operation="cartoonize_image",
+                duration_ms=duration_ms,
+                error=str(e)
+            )
             raise Exception(f"Gemini transformation failed: {e}")
     
     def _upload_to_storage(self, image_path: str, original_picture_id: str) -> str:

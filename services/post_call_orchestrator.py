@@ -4,7 +4,7 @@ Coordinates all post-call processing tasks with retry logic.
 """
 
 import asyncio
-import logging
+import time
 from typing import Dict, Any, Optional
 
 from services.transcript_processor import TranscriptProcessor
@@ -12,8 +12,9 @@ from services.profile_aggregator import ProfileAggregator
 from services.cartoon_generator import CartoonGenerator
 from services.hedra_avatar_id_generator import HedraAvatarGenerator
 from services.voice_cloner import VoiceCloningService
+from services.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PostCallOrchestrator:
@@ -162,10 +163,16 @@ class PostCallOrchestrator:
             dict: Task result with status and data
         """
         last_error = None
+        task_start = time.time()
         
         for attempt in range(max_retries):
             try:
-                logger.debug(f"Running task {task_name} (attempt {attempt + 1}/{max_retries})")
+                logger.info(
+                    f"Task started: {task_name}",
+                    task=task_name,
+                    attempt=attempt + 1,
+                    max_attempts=max_retries
+                )
                 
                 # Run the task (handle both sync and async functions)
                 if asyncio.iscoroutinefunction(task_func):
@@ -174,8 +181,14 @@ class PostCallOrchestrator:
                     # Run sync function in thread pool to avoid blocking
                     result = await asyncio.to_thread(task_func, *args, **kwargs)
                 
-                if attempt > 0:
-                    logger.info(f"Task {task_name} succeeded on attempt {attempt + 1}")
+                duration_ms = int((time.time() - task_start) * 1000)
+                logger.info(
+                    f"Task completed: {task_name}",
+                    task=task_name,
+                    attempt=attempt + 1,
+                    duration_ms=duration_ms,
+                    status="success"
+                )
                 return {
                     "status": "success",
                     "result": result,
@@ -184,15 +197,32 @@ class PostCallOrchestrator:
                 
             except Exception as e:
                 last_error = e
-                logger.warning(f"Task {task_name} failed (attempt {attempt + 1}/{max_retries}): {e}")
+                logger.warning(
+                    f"Task failed: {task_name} - {e}",
+                    task=task_name,
+                    attempt=attempt + 1,
+                    max_attempts=max_retries,
+                    error=str(e)
+                )
                 
                 if attempt < max_retries - 1:
                     # Exponential backoff: 2^attempt seconds
                     backoff_time = 2 ** attempt
-                    logger.debug(f"Retrying in {backoff_time} seconds...")
+                    logger.info(
+                        f"Task retry scheduled: {task_name}",
+                        task=task_name,
+                        retry_in_seconds=backoff_time
+                    )
                     await asyncio.sleep(backoff_time)
                 else:
-                    logger.error(f"Task {task_name} failed after {max_retries} attempts: {e}")
+                    duration_ms = int((time.time() - task_start) * 1000)
+                    logger.error(
+                        f"Task failed permanently: {task_name} - {e}",
+                        task=task_name,
+                        attempts=max_retries,
+                        duration_ms=duration_ms,
+                        error=str(e)
+                    )
         
         # All retries exhausted
         return {
