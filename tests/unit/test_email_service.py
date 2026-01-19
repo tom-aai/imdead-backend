@@ -19,11 +19,11 @@ def mock_user_info():
 
 
 @pytest.fixture
-def mock_student_info():
-    """Mock student user info."""
+def mock_seeker_info():
+    """Mock seeker user info."""
     return MagicMock(
         user=MagicMock(
-            email="student@example.com",
+            email="seeker@example.com",
             user_metadata={"given_name": "Jane", "name": "Jane Smith"}
         )
     )
@@ -165,18 +165,18 @@ class TestExpertNotification:
         assert "3 new messages" in call_args["subject"]
 
 
-class TestStudentNotification:
-    """Test student notification emails."""
+class TestSeekerNotification:
+    """Test seeker notification emails."""
     
-    def test_send_student_notification_no_api_key(self, mock_supabase):
+    def test_send_seeker_notification_no_api_key(self, mock_supabase):
         """Test that no email is sent when API key is missing."""
         service = EmailService(
             supabase_client=mock_supabase,
             resend_api_key=None
         )
         
-        result = service.send_student_chat_updated(
-            student_user_id="student-123",
+        result = service.send_seeker_chat_updated(
+            seeker_user_id="seeker-123",
             expert_name="John Doe",
             share_token="abc123"
         )
@@ -184,14 +184,14 @@ class TestStudentNotification:
         assert result["status"] == "skipped"
     
     @patch('services.email_service.resend.Emails.send')
-    def test_send_student_notification_success(
+    def test_send_seeker_notification_success(
         self, 
         mock_resend_send, 
         mock_supabase, 
-        mock_student_info
+        mock_seeker_info
     ):
-        """Test successful student notification."""
-        mock_supabase.auth.admin.get_user_by_id.return_value = mock_student_info
+        """Test successful seeker notification."""
+        mock_supabase.auth.admin.get_user_by_id.return_value = mock_seeker_info
         mock_resend_send.return_value = {"id": "email-456"}
         
         service = EmailService(
@@ -200,8 +200,8 @@ class TestStudentNotification:
             from_email="noreply@test.com"
         )
         
-        result = service.send_student_chat_updated(
-            student_user_id="student-123",
+        result = service.send_seeker_chat_updated(
+            seeker_user_id="seeker-123",
             expert_name="Dr. Smith",
             share_token="share-token-abc"
         )
@@ -210,7 +210,7 @@ class TestStudentNotification:
         assert result["email_id"] == "email-456"
         
         call_args = mock_resend_send.call_args[0][0]
-        assert call_args["to"] == ["student@example.com"]
+        assert call_args["to"] == ["seeker@example.com"]
         assert "Dr. Smith" in call_args["subject"]
 
 
@@ -226,11 +226,11 @@ class TestIntroductionEmail:
         
         result = service.send_introduction_email(
             expert_user_id="expert-123",
-            student_user_id="student-456",
-            student_name="Jane Doe",
-            student_company="TechCorp",
-            student_role="Engineer",
-            student_message="I'd like to connect"
+            seeker_user_id="seeker-456",
+            seeker_name="Jane Doe",
+            seeker_company="TechCorp",
+            seeker_role="Engineer",
+            seeker_message="I'd like to connect"
         )
         
         assert result["status"] == "skipped"
@@ -241,14 +241,14 @@ class TestIntroductionEmail:
         mock_resend_send, 
         mock_supabase,
         mock_user_info,
-        mock_student_info
+        mock_seeker_info
     ):
         """Test successful introduction email."""
         # Mock both users
         def get_user_by_id(user_id):
             if "expert" in user_id:
                 return mock_user_info
-            return mock_student_info
+            return mock_seeker_info
         
         mock_supabase.auth.admin.get_user_by_id.side_effect = get_user_by_id
         mock_resend_send.return_value = {"id": "intro-email-789"}
@@ -261,11 +261,11 @@ class TestIntroductionEmail:
         
         result = service.send_introduction_email(
             expert_user_id="expert-123",
-            student_user_id="student-456",
-            student_name="Jane Doe",
-            student_company="TechCorp",
-            student_role="ML Engineer",
-            student_message="I'd love to discuss AI applications"
+            seeker_user_id="seeker-456",
+            seeker_name="Jane Doe",
+            seeker_company="TechCorp",
+            seeker_role="ML Engineer",
+            seeker_message="I'd love to discuss AI applications"
         )
         
         assert result["status"] == "sent"
@@ -274,7 +274,7 @@ class TestIntroductionEmail:
         call_args = mock_resend_send.call_args[0][0]
         # Both users should be recipients
         assert "expert@example.com" in call_args["to"]
-        assert "student@example.com" in call_args["to"]
+        assert "seeker@example.com" in call_args["to"]
         # Both emails should be in reply-to
         assert len(call_args["reply_to"]) == 2
 
