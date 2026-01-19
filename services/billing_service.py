@@ -69,7 +69,7 @@ class BillingService:
         if self.stripe_secret_key:
             stripe.api_key = self.stripe_secret_key
         else:
-            logger.warning("STRIPE_SECRET_KEY not configured - Stripe features disabled")
+            logger.warning("Stripe features disabled", reason="STRIPE_SECRET_KEY not configured")
     
     def get_monthly_usage(self, user_id: str) -> float:
         """
@@ -112,7 +112,11 @@ class BillingService:
             return total_seconds
             
         except Exception as e:
-            logger.error(f"Error calculating monthly usage for {user_id}: {e}")
+            logger.error(
+                "Error calculating monthly usage",
+                user_id=user_id,
+                error=str(e)
+            )
             return 0.0
     
     def get_user_billing_info(self, user_id: str) -> Dict[str, Any]:
@@ -148,7 +152,11 @@ class BillingService:
             }
             
         except Exception as e:
-            logger.error(f"Error fetching billing info for {user_id}: {e}")
+            logger.error(
+                "Error fetching billing info",
+                user_id=user_id,
+                error=str(e)
+            )
             return {
                 "billing_status": "free",
                 "is_admin": False,
@@ -254,11 +262,11 @@ class BillingService:
             Stripe Checkout session URL, or None on error
         """
         if not self.stripe_secret_key:
-            logger.error("Stripe not configured")
+            logger.error("Stripe checkout failed", reason="STRIPE_SECRET_KEY not configured")
             return None
         
         if not self.stripe_price_id:
-            logger.error("STRIPE_PRICE_ID not configured")
+            logger.error("Stripe checkout failed", reason="STRIPE_PRICE_ID not configured")
             return None
         
         try:
@@ -290,14 +298,29 @@ class BillingService:
                 metadata={"user_id": user_id},
             )
             
-            logger.info(f"Created Stripe checkout session for user {user_id}")
+            logger.info(
+                "Stripe checkout session created",
+                service="Stripe",
+                operation="create_checkout_session",
+                user_id=user_id
+            )
             return checkout_session.url
             
         except stripe.error.StripeError as e:
-            logger.error(f"Stripe error creating checkout session: {e}")
+            logger.error(
+                "Stripe error creating checkout session",
+                service="Stripe",
+                operation="create_checkout_session",
+                user_id=user_id,
+                error=str(e)
+            )
             return None
         except Exception as e:
-            logger.error(f"Error creating checkout session: {e}")
+            logger.error(
+                "Error creating checkout session",
+                user_id=user_id,
+                error=str(e)
+            )
             return None
     
     def handle_webhook(self, payload: bytes, sig_header: str) -> Dict[str, Any]:
@@ -312,7 +335,7 @@ class BillingService:
             Dict with status and message
         """
         if not self.stripe_webhook_secret:
-            logger.error("Stripe webhook secret not configured")
+            logger.error("Stripe webhook failed", reason="STRIPE_WEBHOOK_SECRET not configured")
             return {"status": "error", "message": "Webhook not configured"}
         
         try:
@@ -320,17 +343,32 @@ class BillingService:
                 payload, sig_header, self.stripe_webhook_secret
             )
         except ValueError as e:
-            logger.error(f"Invalid webhook payload: {e}")
+            logger.error(
+                "Invalid Stripe webhook payload",
+                service="Stripe",
+                operation="webhook",
+                error=str(e)
+            )
             return {"status": "error", "message": "Invalid payload"}
         except stripe.error.SignatureVerificationError as e:
-            logger.error(f"Invalid webhook signature: {e}")
+            logger.error(
+                "Invalid Stripe webhook signature",
+                service="Stripe",
+                operation="webhook",
+                error=str(e)
+            )
             return {"status": "error", "message": "Invalid signature"}
         
         # Handle the event
         event_type = event["type"]
         data = event["data"]["object"]
         
-        logger.info(f"Processing Stripe webhook: {event_type}")
+        logger.info(
+            "Processing Stripe webhook",
+            service="Stripe",
+            operation="webhook",
+            event_type=event_type
+        )
         
         if event_type == "checkout.session.completed":
             return self._handle_checkout_completed(data)
@@ -352,7 +390,12 @@ class BillingService:
         customer_id = session.get("customer")
         
         if not user_id:
-            logger.warning("Checkout completed without user_id in metadata")
+            logger.warning(
+                "Checkout completed without user_id in metadata",
+                service="Stripe",
+                event_type="checkout.session.completed",
+                customer_id=customer_id
+            )
             return {"status": "error", "message": "No user_id in metadata"}
         
         self._update_billing_info(user_id, {
@@ -361,7 +404,12 @@ class BillingService:
             "billing_status": "active",
         })
         
-        logger.info(f"User {user_id} upgraded to paid subscription")
+        logger.info(
+            "User upgraded to paid subscription",
+            user_id=user_id,
+            subscription_id=subscription_id,
+            customer_id=customer_id
+        )
         return {"status": "ok", "message": "Subscription activated"}
     
     def _handle_subscription_updated(self, subscription: Dict) -> Dict[str, Any]:
@@ -376,7 +424,12 @@ class BillingService:
         billing_status = self._map_stripe_status(status)
         self._update_billing_info(user_id, {"billing_status": billing_status})
         
-        logger.info(f"Subscription updated for user {user_id}: {billing_status}")
+        logger.info(
+            "Subscription updated",
+            user_id=user_id,
+            billing_status=billing_status,
+            stripe_status=status
+        )
         return {"status": "ok", "message": "Subscription updated"}
     
     def _handle_subscription_deleted(self, subscription: Dict) -> Dict[str, Any]:
@@ -392,7 +445,11 @@ class BillingService:
             "billing_status": "cancelled",
         })
         
-        logger.info(f"Subscription cancelled for user {user_id}")
+        logger.info(
+            "Subscription cancelled",
+            user_id=user_id,
+            customer_id=customer_id
+        )
         return {"status": "ok", "message": "Subscription cancelled"}
     
     def _handle_invoice_paid(self, invoice: Dict) -> Dict[str, Any]:
@@ -402,7 +459,13 @@ class BillingService:
         customer_id = invoice.get("customer")
         amount = invoice.get("amount_paid", 0) / 100  # Convert cents to dollars
         
-        logger.info(f"Invoice paid for customer {customer_id}: ${amount}")
+        logger.info(
+            "Invoice paid",
+            service="Stripe",
+            event_type="invoice.paid",
+            customer_id=customer_id,
+            amount_usd=amount
+        )
         return {"status": "ok", "message": "Invoice paid"}
     
     def _handle_payment_failed(self, invoice: Dict) -> Dict[str, Any]:
@@ -415,7 +478,11 @@ class BillingService:
         
         self._update_billing_info(user_id, {"billing_status": "past_due"})
         
-        logger.warning(f"Payment failed for user {user_id}")
+        logger.warning(
+            "Payment failed",
+            user_id=user_id,
+            customer_id=customer_id
+        )
         return {"status": "ok", "message": "Payment failure recorded"}
     
     def _map_stripe_status(self, stripe_status: str) -> str:
@@ -444,7 +511,11 @@ class BillingService:
             return None
             
         except Exception as e:
-            logger.error(f"Error looking up user by customer ID: {e}")
+            logger.error(
+                "Error looking up user by customer ID",
+                customer_id=customer_id,
+                error=str(e)
+            )
             return None
     
     def _update_billing_info(self, user_id: str, updates: Dict[str, Any]) -> bool:
@@ -473,7 +544,11 @@ class BillingService:
             return True
             
         except Exception as e:
-            logger.error(f"Error updating billing info for {user_id}: {e}")
+            logger.error(
+                "Error updating billing info",
+                user_id=user_id,
+                error=str(e)
+            )
             return False
     
     def report_usage_to_stripe(self, user_id: str, seconds: float) -> bool:
@@ -513,12 +588,30 @@ class BillingService:
                 },
             )
             
-            logger.info(f"Reported {minutes} minutes usage for customer {customer_id} (user {user_id})")
+            logger.info(
+                "Usage reported to Stripe",
+                service="Stripe",
+                operation="report_usage",
+                user_id=user_id,
+                customer_id=customer_id,
+                minutes=minutes
+            )
             return True
             
         except stripe.error.StripeError as e:
-            logger.error(f"Stripe error reporting usage: {e}")
+            logger.error(
+                "Stripe error reporting usage",
+                service="Stripe",
+                operation="report_usage",
+                user_id=user_id,
+                customer_id=customer_id,
+                error=str(e)
+            )
             return False
         except Exception as e:
-            logger.error(f"Error reporting usage: {e}")
+            logger.error(
+                "Error reporting usage",
+                user_id=user_id,
+                error=str(e)
+            )
             return False
