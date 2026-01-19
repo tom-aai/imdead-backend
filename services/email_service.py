@@ -364,6 +364,219 @@ class EmailService:
             )
             return {"status": "error", "error": str(e)}
     
+    def send_usage_warning_email(
+        self,
+        expert_user_id: str,
+        used_minutes: float,
+        total_minutes: float,
+        percentage: float
+    ) -> Dict[str, Any]:
+        """
+        Send warning email when user reaches 80% of free tier usage.
+        
+        Args:
+            expert_user_id: The expert's user ID
+            used_minutes: Minutes used so far
+            total_minutes: Total free tier minutes
+            percentage: Usage percentage (0-100)
+            
+        Returns:
+            dict: Result with status and details
+        """
+        if not self.resend_api_key:
+            logger.warning("Cannot send email - Resend API key not configured")
+            return {"status": "skipped", "reason": "No API key"}
+        
+        # Check if expert has opted out of emails
+        if not self._is_email_enabled(expert_user_id):
+            logger.info(f"Expert {expert_user_id} has opted out of email notifications")
+            return {"status": "skipped", "reason": "User opted out"}
+        
+        # Get expert's email
+        expert_info = self._get_user_info(expert_user_id)
+        if not expert_info or not expert_info.get("email"):
+            logger.warning(f"Could not find email for expert {expert_user_id}")
+            return {"status": "error", "error": "Expert email not found"}
+        
+        expert_email = expert_info["email"]
+        expert_name = expert_info.get("name", "there")
+        
+        remaining_minutes = round(total_minutes - used_minutes, 1)
+        
+        subject = f"You've used {int(percentage)}% of your free Expert Avatar minutes"
+        
+        html_content = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #1a1a1a;">Hi {expert_name},</h2>
+            
+            <p style="color: #333; font-size: 16px; line-height: 1.6;">
+                You've used <strong>{round(used_minutes, 1)} minutes</strong> of your 
+                <strong>{int(total_minutes)} free minutes</strong> this month.
+            </p>
+            
+            <p style="color: #333; font-size: 16px; line-height: 1.6;">
+                You have approximately <strong>{remaining_minutes} minutes</strong> remaining 
+                before your Expert Avatar will pause conversations and not start new ones.
+            </p>
+            
+            <p style="color: #333; font-size: 16px; line-height: 1.6;">
+                Upgrade to a paid plan to ensure uninterrupted access to your Expert Avatar.
+            </p>
+            
+            <a href="{self.app_url}/settings" 
+               style="display: inline-block; background-color: #000; color: #fff; padding: 12px 24px; 
+                      text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0;">
+                Upgrade Now
+            </a>
+            
+            <p style="color: #666; font-size: 14px; margin-top: 30px;">
+                <a href="{self.app_url}/settings" style="color: #666;">Manage notification preferences</a>
+            </p>
+        </div>
+        """
+        
+        try:
+            logger.info(
+                "Resend email started: usage_warning",
+                service="Resend",
+                operation="send_usage_warning_email",
+                email_type="usage_warning"
+            )
+            
+            send_start = time.time()
+            result = resend.Emails.send({
+                "from": self.from_email,
+                "to": [expert_email],
+                "subject": subject,
+                "html": html_content,
+                "reply_to": self.reply_to_email
+            })
+            
+            duration_ms = int((time.time() - send_start) * 1000)
+            logger.info(
+                "Resend email completed: usage_warning",
+                service="Resend",
+                operation="send_usage_warning_email",
+                email_type="usage_warning",
+                duration_ms=duration_ms,
+                status="sent"
+            )
+            return {"status": "sent", "email_id": result.get("id")}
+            
+        except Exception as e:
+            logger.error(
+                f"Resend email failed: usage_warning - {e}",
+                service="Resend",
+                operation="send_usage_warning_email",
+                email_type="usage_warning",
+                error=str(e)
+            )
+            return {"status": "error", "error": str(e)}
+    
+    def send_out_of_credits_email(
+        self,
+        expert_user_id: str,
+        seeker_name: str = "Someone"
+    ) -> Dict[str, Any]:
+        """
+        Send notification to expert when someone tried to chat but credits are exhausted.
+        
+        Args:
+            expert_user_id: The expert's user ID
+            seeker_name: Name of the person who tried to chat
+            
+        Returns:
+            dict: Result with status and details
+        """
+        if not self.resend_api_key:
+            logger.warning("Cannot send email - Resend API key not configured")
+            return {"status": "skipped", "reason": "No API key"}
+        
+        # Check if expert has opted out of emails
+        if not self._is_email_enabled(expert_user_id):
+            logger.info(f"Expert {expert_user_id} has opted out of email notifications")
+            return {"status": "skipped", "reason": "User opted out"}
+        
+        # Get expert's email
+        expert_info = self._get_user_info(expert_user_id)
+        if not expert_info or not expert_info.get("email"):
+            logger.warning(f"Could not find email for expert {expert_user_id}")
+            return {"status": "error", "error": "Expert email not found"}
+        
+        expert_email = expert_info["email"]
+        expert_name = expert_info.get("name", "there")
+        
+        subject = f"You're out of free credits. Users can no longer chat with your Expert Avatar"
+        
+        html_content = f"""
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #1a1a1a;">Hi {expert_name},</h2>
+            
+            <p style="color: #333; font-size: 16px; line-height: 1.6;">
+                Someone just tried to chat with your Expert Avatar, 
+                but your free minutes for this month have been used up.
+            </p>
+            
+            <p style="color: #333; font-size: 16px; line-height: 1.6;">
+                Upgrade to a paid plan so people can continue learning from your expertise.
+            </p>
+            
+            <a href="{self.app_url}/settings" 
+               style="display: inline-block; background-color: #000; color: #fff; padding: 12px 24px; 
+                      text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0;">
+                Upgrade Now
+            </a>
+            
+            <p style="color: #666; font-size: 14px; margin-top: 30px;">
+                <a href="{self.app_url}/settings" style="color: #666;">Manage notification preferences</a>
+            </p>
+        </div>
+        """
+        
+        try:
+            # Use idempotency key to prevent duplicate emails within the same hour
+            idempotency_key = f"out-of-credits-{expert_user_id}-{datetime.now(UTC).strftime('%Y%m%d%H')}"
+            
+            logger.info(
+                "Resend email started: out_of_credits",
+                service="Resend",
+                operation="send_out_of_credits_email",
+                email_type="out_of_credits"
+            )
+            
+            send_start = time.time()
+            result = resend.Emails.send({
+                "from": self.from_email,
+                "to": [expert_email],
+                "subject": subject,
+                "html": html_content,
+                "reply_to": self.reply_to_email,
+                "headers": {
+                    "X-Idempotency-Key": idempotency_key
+                }
+            })
+            
+            duration_ms = int((time.time() - send_start) * 1000)
+            logger.info(
+                "Resend email completed: out_of_credits",
+                service="Resend",
+                operation="send_out_of_credits_email",
+                email_type="out_of_credits",
+                duration_ms=duration_ms,
+                status="sent"
+            )
+            return {"status": "sent", "email_id": result.get("id")}
+            
+        except Exception as e:
+            logger.error(
+                f"Resend email failed: out_of_credits - {e}",
+                service="Resend",
+                operation="send_out_of_credits_email",
+                email_type="out_of_credits",
+                error=str(e)
+            )
+            return {"status": "error", "error": str(e)}
+    
     def _is_email_enabled(self, user_id: str) -> bool:
         """Check if user has email notifications enabled."""
         try:

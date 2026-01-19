@@ -10,6 +10,8 @@ from supabase import create_client, Client
 
 from services.hedra_avatar_id_generator import HedraAvatarGenerator
 from services.voice_cloner import VoiceCloningService
+from services.billing_service import BillingService
+from services.email_service import EmailService
 from services.logging_config import (
 	configure_logging,
 	get_logger,
@@ -148,6 +150,8 @@ voice_cloning_service = VoiceCloningService(
 	inworld_api_key=INWORLD_API_KEY,
 	inworld_workspace_id=INWORLD_WORKSPACE_ID
 )
+billing_service = BillingService(supabase)
+email_service = EmailService(supabase)
 
 
 @app.route("/")
@@ -1126,6 +1130,160 @@ def update_session_avatar_endpoint():
 		
 	except Exception as e:
 		logger.error(f"Error enqueuing avatar update: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+
+@app.route("/api/billing/usage/<user_id>", methods=["GET"])
+@require_api_key
+def get_billing_usage(user_id: str):
+	"""
+	Get usage and billing information for a user.
+	
+	Returns current month usage, free tier status, and billing details.
+	"""
+	try:
+		usage_info = billing_service.get_usage_info(user_id)
+		return jsonify(usage_info.to_dict()), 200
+	except Exception as e:
+		logger.error(f"Error getting billing usage for {user_id}: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/billing/can-start-session/<expert_user_id>", methods=["GET"])
+@require_api_key
+def can_start_chat_session(expert_user_id: str):
+	"""
+	Check if a chat session can be started for an expert.
+	
+	Used by the frontend /api/chat-session/[share_token]/connection route
+	to verify credits before creating a room and starting the chat agent.
+	"""
+	try:
+		can_start, reason = billing_service.can_start_session(expert_user_id)
+		return jsonify({
+			"can_start": can_start,
+			"reason": reason
+		}), 200
+	except Exception as e:
+		logger.error(f"Error checking session availability for {expert_user_id}: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/billing/create-checkout-session", methods=["POST"])
+@require_api_key
+def create_checkout_session():
+	"""
+	Create a Stripe Checkout session for upgrading to paid.
+	
+	Required fields:
+	- user_id: The user's ID
+	- email: The user's email
+	"""
+	try:
+		data = request.get_json()
+		user_id = data.get("user_id")
+		email = data.get("email")
+		
+		if not user_id or not email:
+			return jsonify({"error": "user_id and email are required"}), 400
+		
+		checkout_url = billing_service.create_checkout_session(user_id, email)
+		
+		if not checkout_url:
+			return jsonify({"error": "Failed to create checkout session"}), 500
+		
+		return jsonify({"checkout_url": checkout_url}), 200
+		
+	except Exception as e:
+		logger.error(f"Error creating checkout session: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/billing/webhook", methods=["POST"])
+def stripe_webhook():
+	"""
+	Handle Stripe webhook events.
+	
+	This endpoint does not require API key auth - it uses Stripe signature verification.
+	"""
+	try:
+		payload = request.get_data()
+		sig_header = request.headers.get("Stripe-Signature")
+		
+		if not sig_header:
+			return jsonify({"error": "Missing Stripe signature"}), 400
+		
+		result = billing_service.handle_webhook(payload, sig_header)
+		
+		if result.get("status") == "error":
+			return jsonify(result), 400
+		
+		return jsonify(result), 200
+		
+	except Exception as e:
+		logger.error(f"Error handling Stripe webhook: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/billing/report-usage", methods=["POST"])
+@require_api_key
+def report_usage():
+	"""
+	Report metered usage to Stripe for a paid user.
+	
+	Called after a chat session ends to bill for usage.
+	
+	Required fields:
+	- user_id: The expert's user ID
+	- seconds: Usage in seconds
+	"""
+	try:
+		data = request.get_json()
+		user_id = data.get("user_id")
+		seconds = data.get("seconds", 0)
+		
+		if not user_id:
+			return jsonify({"error": "user_id is required"}), 400
+		
+		success = billing_service.report_usage_to_stripe(user_id, float(seconds))
+		
+		return jsonify({
+			"status": "ok" if success else "skipped",
+			"message": "Usage reported" if success else "Not a paid user or reporting failed"
+		}), 200
+		
+	except Exception as e:
+		logger.error(f"Error reporting usage: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/billing/notify-out-of-credits", methods=["POST"])
+@require_api_key
+def notify_out_of_credits():
+	"""
+	Send notification to expert when someone tried to chat but credits are exhausted.
+	
+	Called by the frontend when a session cannot start due to no credits.
+	
+	Required fields:
+	- expert_user_id: The expert's user ID
+	- seeker_name: Name of the person who tried to chat (optional)
+	"""
+	try:
+		data = request.get_json()
+		expert_user_id = data.get("expert_user_id")
+		seeker_name = data.get("seeker_name", "Someone")
+		
+		if not expert_user_id:
+			return jsonify({"error": "expert_user_id is required"}), 400
+		
+		result = email_service.send_out_of_credits_email(expert_user_id, seeker_name)
+		
+		return jsonify(result), 200
+		
+	except Exception as e:
+		logger.error(f"Error sending out-of-credits notification: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
 

@@ -7,3 +7,4 @@ gunicorn==21.2.0
 google-genai==0.2.2
 Pillow==10.4.0
 resend==2.5.0
+stripe==11.3.0
