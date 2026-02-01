@@ -1200,6 +1200,36 @@ def create_checkout_session():
 		return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/billing/create-portal-session", methods=["POST"])
+@require_api_key
+def create_portal_session():
+	"""
+	Create a Stripe Customer Portal session for managing subscription.
+	
+	Allows users to view invoices, update payment methods, and cancel subscription.
+	
+	Required fields:
+	- user_id: The user's ID
+	"""
+	try:
+		data = request.get_json()
+		user_id = data.get("user_id")
+		
+		if not user_id:
+			return jsonify({"error": "user_id is required"}), 400
+		
+		portal_url = billing_service.create_customer_portal_session(user_id)
+		
+		if not portal_url:
+			return jsonify({"error": "Failed to create portal session. User may not have a Stripe account."}), 400
+		
+		return jsonify({"portal_url": portal_url}), 200
+		
+	except Exception as e:
+		logger.error(f"Error creating portal session: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/billing/webhook", methods=["POST"])
 def stripe_webhook():
 	"""
@@ -1284,6 +1314,42 @@ def notify_out_of_credits():
 		
 	except Exception as e:
 		logger.error(f"Error sending out-of-credits notification: {e}", exc_info=True)
+		return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/user/account", methods=["DELETE"])
+@require_api_key
+def delete_user_account():
+	"""
+	Delete a user account and all associated data.
+	
+	This performs a full account deletion including:
+	- Cancelling any active Stripe subscription
+	- Deleting all chat sessions
+	- Soft-deleting share tokens
+	- Deleting all interview data
+	- Deleting the user profile
+	- Deleting the Supabase auth user
+	
+	Required fields:
+	- user_id: The user's ID
+	"""
+	try:
+		data = request.get_json()
+		user_id = data.get("user_id")
+		
+		if not user_id:
+			return jsonify({"error": "user_id is required"}), 400
+		
+		result = billing_service.delete_user_account(user_id)
+		
+		if result.get("status") == "error":
+			return jsonify(result), 500
+		
+		return jsonify(result), 200
+		
+	except Exception as e:
+		logger.error(f"Error deleting user account: {e}", exc_info=True)
 		return jsonify({"error": str(e)}), 500
 
 

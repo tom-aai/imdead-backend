@@ -48,3 +48,23 @@ services:
       - key: STUCK_JOB_TIMEOUT
         value: 30  # Reset jobs stuck for 30+ minutes
 
+  # Next.js Frontend
+  - type: web
+    name: expertavatar-frontend
+    env: node
+    region: oregon
+    plan: free  # or starter ($7/month)
+    rootDir: expertavatar-interview/expertavatar-interview-frontend
+    buildCommand: pnpm install && pnpm build
+    startCommand: pnpm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        sync: false  # Set to your backend URL
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: NEXT_PUBLIC_LIVEKIT_URL
+        sync: false

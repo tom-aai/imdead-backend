@@ -845,3 +845,234 @@ class TestInvoicePaid:
         
         assert result['status'] == 'ok'
         assert 'Invoice paid' in result['message']
+
+
+class TestCreateCustomerPortalSession:
+    """Test create_customer_portal_session method."""
+    
+    def test_stripe_not_configured(self, mock_supabase):
+        """Test returns None when Stripe not configured."""
+        service = BillingService(mock_supabase)
+        service.stripe_secret_key = None
+        
+        result = service.create_customer_portal_session('user-123')
+        
+        assert result is None
+    
+    def test_no_customer_id(self, mock_supabase):
+        """Test returns None when user has no Stripe customer."""
+        service = BillingService(mock_supabase)
+        service.stripe_secret_key = 'sk_test_123'
+        
+        with patch.object(service, 'get_user_billing_info', return_value={
+            'stripe_customer_id': None,
+        }):
+            result = service.create_customer_portal_session('user-123')
+            
+            assert result is None
+    
+    def test_successful_portal_session(self, mock_supabase):
+        """Test successful portal session creation."""
+        service = BillingService(mock_supabase)
+        service.stripe_secret_key = 'sk_test_123'
+        service.app_url = 'https://example.com'
+        
+        mock_session = MagicMock()
+        mock_session.url = 'https://billing.stripe.com/session_123'
+        
+        with patch.object(service, 'get_user_billing_info', return_value={
+            'stripe_customer_id': 'cus_123',
+        }):
+            with patch('services.billing_service.stripe.billing_portal.Session.create', 
+                       return_value=mock_session):
+                result = service.create_customer_portal_session('user-123')
+                
+                assert result == 'https://billing.stripe.com/session_123'
+    
+    def test_stripe_error_returns_none(self, mock_supabase):
+        """Test Stripe errors return None."""
+        service = BillingService(mock_supabase)
+        service.stripe_secret_key = 'sk_test_123'
+        
+        with patch.object(service, 'get_user_billing_info', return_value={
+            'stripe_customer_id': 'cus_123',
+        }):
+            with patch('services.billing_service.stripe.billing_portal.Session.create',
+                       side_effect=stripe.error.StripeError("API Error")):
+                result = service.create_customer_portal_session('user-123')
+                
+                assert result is None
+    
+    def test_portal_session_with_return_url(self, mock_supabase):
+        """Test that portal session is created with correct return URL."""
+        service = BillingService(mock_supabase)
+        service.stripe_secret_key = 'sk_test_123'
+        service.app_url = 'https://expertavatar.com'
+        
+        mock_session = MagicMock()
+        mock_session.url = 'https://billing.stripe.com/session_123'
+        
+        with patch.object(service, 'get_user_billing_info', return_value={
+            'stripe_customer_id': 'cus_123',
+        }):
+            with patch('services.billing_service.stripe.billing_portal.Session.create', 
+                       return_value=mock_session) as mock_create:
+                service.create_customer_portal_session('user-123')
+                
+                call_kwargs = mock_create.call_args.kwargs
+                assert call_kwargs['customer'] == 'cus_123'
+                assert call_kwargs['return_url'] == 'https://expertavatar.com/settings'
+
+
+class TestCancelSubscription:
+    """Test _cancel_subscription method."""
+    
+    def test_stripe_not_configured(self, mock_supabase):
+        """Test returns False when Stripe not configured."""
+        service = BillingService(mock_supabase)
+        service.stripe_secret_key = None
+        
+        result = service._cancel_subscription('sub_123')
+        
+        assert result is False
+    
+    def test_successful_cancellation(self, mock_supabase):
+        """Test successful subscription cancellation."""
+        service = BillingService(mock_supabase)
+        service.stripe_secret_key = 'sk_test_123'
+        
+        with patch('services.billing_service.stripe.Subscription.cancel'):
+            result = service._cancel_subscription('sub_123')
+            
+            assert result is True
+    
+    def test_stripe_error_returns_false(self, mock_supabase):
+        """Test Stripe error during cancellation returns False."""
+        service = BillingService(mock_supabase)
+        service.stripe_secret_key = 'sk_test_123'
+        
+        with patch('services.billing_service.stripe.Subscription.cancel',
+                   side_effect=stripe.error.StripeError("Error")):
+            result = service._cancel_subscription('sub_123')
+            
+            assert result is False
+
+
+class TestDeleteUserAccount:
+    """Test delete_user_account method."""
+    
+    def test_deletes_free_user(self, mock_supabase):
+        """Test deleting user without subscription."""
+        service = BillingService(mock_supabase)
+        
+        with patch.object(service, 'get_user_billing_info', return_value={
+            'stripe_subscription_id': None,
+        }):
+            with patch.object(service, '_delete_user_data'):
+                result = service.delete_user_account('user-123')
+                
+                assert result['status'] == 'ok'
+    
+    def test_cancels_subscription_before_delete(self, mock_supabase):
+        """Test subscription is cancelled before deletion."""
+        service = BillingService(mock_supabase)
+        service.stripe_secret_key = 'sk_test_123'
+        
+        with patch.object(service, 'get_user_billing_info', return_value={
+            'stripe_subscription_id': 'sub_123',
+        }):
+            with patch.object(service, '_cancel_subscription') as mock_cancel:
+                with patch.object(service, '_delete_user_data'):
+                    service.delete_user_account('user-123')
+                    
+                    mock_cancel.assert_called_once_with('sub_123')
+    
+    def test_calls_delete_user_data(self, mock_supabase):
+        """Test that _delete_user_data is called."""
+        service = BillingService(mock_supabase)
+        
+        with patch.object(service, 'get_user_billing_info', return_value={}):
+            with patch.object(service, '_delete_user_data') as mock_delete:
+                service.delete_user_account('user-123')
+                
+                mock_delete.assert_called_once_with('user-123')
+    
+    def test_deletes_supabase_auth_user(self, mock_supabase):
+        """Test that Supabase auth user is deleted."""
+        service = BillingService(mock_supabase)
+        
+        with patch.object(service, 'get_user_billing_info', return_value={}):
+            with patch.object(service, '_delete_user_data'):
+                service.delete_user_account('user-123')
+                
+                mock_supabase.auth.admin.delete_user.assert_called_once_with('user-123')
+    
+    def test_handles_deletion_error(self, mock_supabase):
+        """Test error handling during deletion."""
+        service = BillingService(mock_supabase)
+        
+        with patch.object(service, 'get_user_billing_info', return_value={}):
+            with patch.object(service, '_delete_user_data', 
+                             side_effect=Exception("DB Error")):
+                result = service.delete_user_account('user-123')
+                
+                assert result['status'] == 'error'
+                assert 'DB Error' in result['message']
+
+
+class TestDeleteUserData:
+    """Test _delete_user_data method."""
+    
+    def test_deletes_chat_sessions(self, mock_supabase):
+        """Test that chat_sessions are deleted."""
+        # Setup mock for session lookup
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        
+        service = BillingService(mock_supabase)
+        service._delete_user_data('user-123')
+        
+        # Verify delete was called on chat_sessions
+        mock_supabase.table.assert_any_call("chat_sessions")
+    
+    def test_soft_deletes_avatar_share_tokens(self, mock_supabase):
+        """Test that avatar_share_tokens are soft-deleted."""
+        # Setup mock for session lookup
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+            {'session_id': 'session-1'},
+            {'session_id': 'session-2'},
+        ]
+        
+        service = BillingService(mock_supabase)
+        service._delete_user_data('user-123')
+        
+        # Verify update was called on avatar_share_tokens
+        mock_supabase.table.assert_any_call("avatar_share_tokens")
+    
+    def test_deletes_interview_call_analysis(self, mock_supabase):
+        """Test that interview_call_analysis records are deleted."""
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+            {'session_id': 'session-1'},
+        ]
+        
+        service = BillingService(mock_supabase)
+        service._delete_user_data('user-123')
+        
+        mock_supabase.table.assert_any_call("interview_call_analysis")
+    
+    def test_deletes_interview_calls(self, mock_supabase):
+        """Test that interview_calls are deleted."""
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        
+        service = BillingService(mock_supabase)
+        service._delete_user_data('user-123')
+        
+        mock_supabase.table.assert_any_call("interview_calls")
+    
+    def test_deletes_user_profiles(self, mock_supabase):
+        """Test that user_profiles are deleted."""
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        
+        service = BillingService(mock_supabase)
+        service._delete_user_data('user-123')
+        
+        mock_supabase.table.assert_any_call("user_profiles")

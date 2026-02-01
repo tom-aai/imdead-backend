@@ -323,6 +323,61 @@ class BillingService:
             )
             return None
     
+    def create_customer_portal_session(self, user_id: str) -> Optional[str]:
+        """
+        Create a Stripe Customer Portal session for managing subscription.
+        
+        Allows users to view invoices, update payment methods, and cancel subscription.
+        
+        Args:
+            user_id: The user's ID
+            
+        Returns:
+            Stripe Customer Portal session URL, or None on error
+        """
+        if not self.stripe_secret_key:
+            logger.error("Stripe portal failed", reason="STRIPE_SECRET_KEY not configured")
+            return None
+        
+        billing_info = self.get_user_billing_info(user_id)
+        customer_id = billing_info.get("stripe_customer_id")
+        
+        if not customer_id:
+            logger.warning(
+                "Cannot create portal session - no Stripe customer",
+                user_id=user_id
+            )
+            return None
+        
+        try:
+            session = stripe.billing_portal.Session.create(
+                customer=customer_id,
+                return_url=f"{self.app_url}/settings",
+            )
+            logger.info(
+                "Customer portal session created",
+                service="Stripe",
+                operation="create_portal_session",
+                user_id=user_id
+            )
+            return session.url
+        except stripe.error.StripeError as e:
+            logger.error(
+                "Stripe error creating portal session",
+                service="Stripe",
+                operation="create_portal_session",
+                user_id=user_id,
+                error=str(e)
+            )
+            return None
+        except Exception as e:
+            logger.error(
+                "Error creating portal session",
+                user_id=user_id,
+                error=str(e)
+            )
+            return None
+    
     def handle_webhook(self, payload: bytes, sig_header: str) -> Dict[str, Any]:
         """
         Handle Stripe webhook events.
@@ -615,3 +670,129 @@ class BillingService:
                 error=str(e)
             )
             return False
+    
+    def delete_user_account(self, user_id: str) -> Dict[str, Any]:
+        """
+        Delete a user account and all associated data.
+        
+        Steps:
+        1. Cancel Stripe subscription if active
+        2. Delete chat_sessions where expert_user_id = user_id
+        3. Soft-delete avatar_share_tokens (set is_active = false)
+        4. Delete interview_call_analysis
+        5. Delete interview_calls
+        6. Delete user_profiles
+        7. Delete Supabase auth user
+        
+        Args:
+            user_id: The user's ID
+            
+        Returns:
+            Dict with status and message
+        """
+        logger.info("Starting account deletion", user_id=user_id)
+        
+        try:
+            # 1. Cancel Stripe subscription if exists
+            billing_info = self.get_user_billing_info(user_id)
+            if billing_info.get("stripe_subscription_id"):
+                self._cancel_subscription(billing_info["stripe_subscription_id"])
+                logger.info("Cancelled Stripe subscription", user_id=user_id)
+            
+            # 2-6. Delete database records (cascade)
+            self._delete_user_data(user_id)
+            
+            # 7. Delete auth user
+            self.supabase.auth.admin.delete_user(user_id)
+            
+            logger.info("Account deletion completed", user_id=user_id)
+            return {"status": "ok", "message": "Account deleted"}
+            
+        except Exception as e:
+            logger.error("Account deletion failed", user_id=user_id, error=str(e))
+            return {"status": "error", "message": str(e)}
+    
+    def _cancel_subscription(self, subscription_id: str) -> bool:
+        """
+        Cancel a Stripe subscription.
+        
+        Args:
+            subscription_id: The Stripe subscription ID
+            
+        Returns:
+            True if successful, False on error
+        """
+        if not self.stripe_secret_key:
+            logger.warning(
+                "Cannot cancel subscription - Stripe not configured",
+                subscription_id=subscription_id
+            )
+            return False
+        
+        try:
+            stripe.Subscription.cancel(subscription_id)
+            logger.info(
+                "Subscription cancelled",
+                service="Stripe",
+                operation="cancel_subscription",
+                subscription_id=subscription_id
+            )
+            return True
+        except stripe.error.StripeError as e:
+            logger.error(
+                "Failed to cancel subscription",
+                service="Stripe",
+                operation="cancel_subscription",
+                subscription_id=subscription_id,
+                error=str(e)
+            )
+            return False
+    
+    def _delete_user_data(self, user_id: str) -> None:
+        """
+        Delete all user data from the database.
+        
+        This performs a cascading delete in the correct order to respect
+        potential foreign key constraints.
+        
+        Args:
+            user_id: The user's ID
+        """
+        # 1. Get all session IDs for this user
+        sessions_response = self.supabase.table("interview_calls").select(
+            "session_id"
+        ).eq("user_id", user_id).execute()
+        
+        session_ids = [s["session_id"] for s in (sessions_response.data or [])]
+        
+        # 2. Delete chat_sessions where expert_user_id = user_id
+        self.supabase.table("chat_sessions").delete().eq(
+            "expert_user_id", user_id
+        ).execute()
+        logger.info("Deleted chat_sessions", user_id=user_id)
+        
+        # 3. Soft-delete avatar_share_tokens for each session
+        for session_id in session_ids:
+            self.supabase.table("avatar_share_tokens").update({
+                "is_active": False
+            }).eq("session_id", session_id).execute()
+        logger.info("Soft-deleted avatar_share_tokens", user_id=user_id, session_count=len(session_ids))
+        
+        # 4. Delete interview_call_analysis for each session
+        for session_id in session_ids:
+            self.supabase.table("interview_call_analysis").delete().eq(
+                "session_id", session_id
+            ).execute()
+        logger.info("Deleted interview_call_analysis", user_id=user_id)
+        
+        # 5. Delete interview_calls
+        self.supabase.table("interview_calls").delete().eq(
+            "user_id", user_id
+        ).execute()
+        logger.info("Deleted interview_calls", user_id=user_id)
+        
+        # 6. Delete user_profiles
+        self.supabase.table("user_profiles").delete().eq(
+            "user_id", user_id
+        ).execute()
+        logger.info("Deleted user_profiles", user_id=user_id)
