@@ -6,10 +6,10 @@ services:
     region: oregon
     plan: free  # or starter ($7/month)
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    # Bind to 0.0.0.0:$PORT (Render provides PORT automatically, usually 10000)
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
     envVars:
-      - key: PORT
-        value: 5001
+      # Core required keys
       - key: SUPABASE_URL
         sync: false  # Set in Render dashboard
       - key: SUPABASE_SERVICE_KEY
@@ -20,8 +20,34 @@ services:
         sync: false  # Set in Render dashboard
       - key: CARTESIA_API_KEY
         sync: false  # Set in Render dashboard
+      - key: GOOGLE_API_KEY
+        sync: false  # Required for cartoon/illustration generation via Gemini
       - key: BACKEND_API_KEY
         sync: false  # Set in Render dashboard - shared secret for agent authentication
+      # Payment features (Stripe) - Optional
+      - key: STRIPE_SECRET_KEY
+        sync: false  # Optional - required for paid features
+      - key: STRIPE_PRICE_ID
+        sync: false  # Optional - Stripe price ID for subscription product
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false  # Optional - required for Stripe webhooks
+      # Email notifications (Resend) - Optional
+      - key: RESEND_API_KEY
+        sync: false  # Optional - required for email notifications
+      - key: RESEND_FROM_EMAIL
+        sync: false  # Optional - defaults to "Expert Avatar <hello@notifications.melochora.com>"
+      - key: SUPPORT_EMAIL
+        sync: false  # Optional - defaults to "support@melochora.com"
+      # App configuration
+      - key: APP_URL
+        sync: false  # Your app domain - defaults to "https://expertavatar.com"
+      # Voice provider config - Optional
+      - key: VOICE_PROVIDER
+        value: inworld  # or "cartesia"
+      - key: INWORLD_API_KEY
+        sync: false  # Optional - if using Inworld for voice
+      - key: INWORLD_WORKSPACE_ID
+        sync: false  # Optional - if using Inworld for voice
     healthCheckPath: /health
 
   # Background Worker for Processing Jobs
@@ -33,6 +59,7 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python worker.py
     envVars:
+      # Core required keys
       - key: SUPABASE_URL
         sync: false  # Set in Render dashboard
       - key: SUPABASE_SERVICE_KEY
@@ -43,6 +70,31 @@ services:
         sync: false  # Set in Render dashboard
       - key: CARTESIA_API_KEY
         sync: false  # Set in Render dashboard
+      - key: GOOGLE_API_KEY
+        sync: false  # Required for cartoon/illustration generation via Gemini
+      # Payment features (Stripe) - Optional
+      - key: STRIPE_SECRET_KEY
+        sync: false  # Optional - required for paid features
+      - key: STRIPE_PRICE_ID
+        sync: false  # Optional - Stripe price ID for subscription product
+      # Email notifications (Resend) - Optional
+      - key: RESEND_API_KEY
+        sync: false  # Optional - required for email notifications
+      - key: RESEND_FROM_EMAIL
+        sync: false  # Optional - defaults to "Expert Avatar <hello@notifications.melochora.com>"
+      - key: SUPPORT_EMAIL
+        sync: false  # Optional - defaults to "support@melochora.com"
+      # App configuration
+      - key: APP_URL
+        sync: false  # Your app domain - defaults to "https://expertavatar.com"
+      # Voice provider config - Optional
+      - key: VOICE_PROVIDER
+        value: inworld  # or "cartesia"
+      - key: INWORLD_API_KEY
+        sync: false  # Optional - if using Inworld for voice
+      - key: INWORLD_WORKSPACE_ID
+        sync: false  # Optional - if using Inworld for voice
+      # Worker configuration
       - key: WORKER_POLL_INTERVAL
         value: 5  # Poll every 5 seconds
       - key: STUCK_JOB_TIMEOUT
