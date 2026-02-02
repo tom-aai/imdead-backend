@@ -24,20 +24,20 @@ services:
         sync: false  # Required for cartoon/illustration generation via Gemini
       - key: BACKEND_API_KEY
         sync: false  # Set in Render dashboard - shared secret for agent authentication
-      # Payment features (Stripe) - Optional
+      # Payment features (Stripe)
       - key: STRIPE_SECRET_KEY
-        sync: false  # Optional - required for paid features
+        sync: false  
       - key: STRIPE_PRICE_ID
-        sync: false  # Optional - Stripe price ID for subscription product
+        sync: false  
       - key: STRIPE_WEBHOOK_SECRET
-        sync: false  # Optional - required for Stripe webhooks
-      # Email notifications (Resend) - Optional
+        sync: false  
+      # Email notifications (Resend) 
       - key: RESEND_API_KEY
-        sync: false  # Optional - required for email notifications
+        sync: false 
       - key: RESEND_FROM_EMAIL
-        sync: false  # Optional - defaults to "Expert Avatar <hello@notifications.melochora.com>"
+        sync: false  # defaults to "Expert Avatar <hello@notifications.melochora.com>"
       - key: SUPPORT_EMAIL
-        sync: false  # Optional - defaults to "support@melochora.com"
+        sync: false  # defaults to "support@melochora.com"
       # App configuration
       - key: APP_URL
         sync: false  # Your app domain - defaults to "https://expertavatar.com"
@@ -45,9 +45,9 @@ services:
       - key: VOICE_PROVIDER
         value: inworld  # or "cartesia"
       - key: INWORLD_API_KEY
-        sync: false  # Optional - if using Inworld for voice
+        sync: false  
       - key: INWORLD_WORKSPACE_ID
-        sync: false  # Optional - if using Inworld for voice
+        sync: false  
     healthCheckPath: /health
 
   # Background Worker for Processing Jobs
@@ -74,16 +74,16 @@ services:
         sync: false  # Required for cartoon/illustration generation via Gemini
       # Payment features (Stripe) - Optional
       - key: STRIPE_SECRET_KEY
-        sync: false  # Optional - required for paid features
+        sync: false  
       - key: STRIPE_PRICE_ID
-        sync: false  # Optional - Stripe price ID for subscription product
-      # Email notifications (Resend) - Optional
+        sync: false  
+      # Email notifications (Resend) 
       - key: RESEND_API_KEY
-        sync: false  # Optional - required for email notifications
+        sync: false  
       - key: RESEND_FROM_EMAIL
-        sync: false  # Optional - defaults to "Expert Avatar <hello@notifications.melochora.com>"
+        sync: false  # defaults to "Expert Avatar <hello@notifications.melochora.com>"
       - key: SUPPORT_EMAIL
-        sync: false  # Optional - defaults to "support@melochora.com"
+        sync: false  # defaults to "support@melochora.com"
       # App configuration
       - key: APP_URL
         sync: false  # Your app domain - defaults to "https://expertavatar.com"
