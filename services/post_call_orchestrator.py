@@ -116,8 +116,9 @@ class PostCallOrchestrator:
                 if (not has_user_speech and not has_user_messages) or transcript_length < 50:
                     reason = "no_user_speech" if not has_user_speech and not has_user_messages else "transcript_too_short"
                     logger.info(f"Skipping processing for session {session_id} - {reason} (transcript_length={transcript_length})")
-                    # Delete the orphaned interview_calls record
-                    self.supabase.table("interview_calls").delete().eq("session_id", session_id).execute()
+                    # Keep the interview_calls record so the frontend can detect it as a
+                    # "processing" session and show a card with a delete button.
+                    # The user can then delete the session from the dashboard.
                     return {"session_id": session_id, "status": "skipped", "reason": reason}
         except Exception as e:
             logger.warning(f"Error checking for user speech in session {session_id}: {e}. Continuing with processing.")
