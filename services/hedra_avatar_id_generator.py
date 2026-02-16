@@ -418,5 +418,18 @@ class HedraAvatarGenerator:
             logger.debug(f"Updated interview_call_analysis table with hedra_avatar_id: {hedra_avatar_id}, cartoon_id: {cartoon_id} for session {session_id}")
             return response.data[0]
         else:
-            raise Exception(f"Failed to update interview_call_analysis for session {session_id}. Row may not exist.")
+            # Check if the row exists at all
+            check_response = self.supabase.table("interview_call_analysis")\
+                .select("session_id")\
+                .eq("session_id", session_id)\
+                .execute()
+            
+            if not check_response.data:
+                raise Exception(
+                    f"Failed to update interview_call_analysis for session {session_id}. "
+                    f"Row does not exist - transcript processing likely failed. "
+                    f"Cannot update hedra_avatar_id without interview_call_analysis record."
+                )
+            else:
+                raise Exception(f"Failed to update interview_call_analysis for session {session_id}. Update returned no data.")
 

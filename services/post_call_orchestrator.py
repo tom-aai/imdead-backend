@@ -79,6 +79,49 @@ class PostCallOrchestrator:
         """
         logger.info(f"Starting post-call orchestration for session {session_id}")
         
+        # Early check: verify the conversation has meaningful user content
+        try:
+            response = self.supabase.table("interview_calls").select("conversation, usage").eq("session_id", session_id).execute()
+            if response.data:
+                call = response.data[0]
+                conversation = call.get("conversation", {})
+                usage = call.get("usage", {})
+                has_user_speech = usage.get("stt_audio_duration", 0) > 0
+                has_user_messages = any(
+                    item.get("role") == "user" for item in conversation.get("items", [])
+                )
+                
+                # Format transcript to check length (simple inline formatting)
+                transcript_lines = []
+                for item in conversation.get("items", []):
+                    role = item.get("role", "").lower()
+                    content = item.get("content", "")
+                    messages = []
+                    if isinstance(content, list):
+                        for msg in content:
+                            if isinstance(msg, dict):
+                                text = msg.get("text", msg.get("transcript", ""))
+                                if text:
+                                    messages.append(text)
+                            elif isinstance(msg, str):
+                                messages.append(msg)
+                    elif isinstance(content, str) and content:
+                        messages.append(content)
+                    for msg in messages:
+                        transcript_lines.append(f"[{role.upper()}]: {msg}")
+                transcript = "\n".join(transcript_lines)
+                transcript_length = len(transcript) if transcript else 0
+                
+                # Skip if no user speech/messages OR transcript is too short to be meaningful (< 50 chars)
+                if (not has_user_speech and not has_user_messages) or transcript_length < 50:
+                    reason = "no_user_speech" if not has_user_speech and not has_user_messages else "transcript_too_short"
+                    logger.info(f"Skipping processing for session {session_id} - {reason} (transcript_length={transcript_length})")
+                    # Delete the orphaned interview_calls record
+                    self.supabase.table("interview_calls").delete().eq("session_id", session_id).execute()
+                    return {"session_id": session_id, "status": "skipped", "reason": reason}
+        except Exception as e:
+            logger.warning(f"Error checking for user speech in session {session_id}: {e}. Continuing with processing.")
+        
         results = {
             "session_id": session_id,
             "status": "success",
@@ -95,16 +138,29 @@ class PostCallOrchestrator:
             )
             results["tasks"]["transcript_processing"] = transcript_result
             
-            # Task 2: Aggregate user profile data
-            profile_result = await self._run_with_retry(
-                task_name="profile_aggregation",
-                task_func=self._aggregate_profile,
-                session_id=session_id,
-                max_retries=3
-            )
-            results["tasks"]["profile_aggregation"] = profile_result
+            # Check if transcript processing succeeded - downstream tasks depend on interview_call_analysis existing
+            transcript_succeeded = transcript_result.get("status") == "success"
+            
+            if not transcript_succeeded:
+                logger.warning(f"Transcript processing failed for session {session_id}. Skipping tasks that depend on interview_call_analysis.")
+            
+            # Task 2: Aggregate user profile data (depends on interview_call_analysis)
+            if transcript_succeeded:
+                profile_result = await self._run_with_retry(
+                    task_name="profile_aggregation",
+                    task_func=self._aggregate_profile,
+                    session_id=session_id,
+                    max_retries=3
+                )
+                results["tasks"]["profile_aggregation"] = profile_result
+            else:
+                results["tasks"]["profile_aggregation"] = {
+                    "status": "skipped",
+                    "reason": "transcript_processing_failed"
+                }
             
             # Task 3: Cartoonize user image (transform to editorial illustration)
+            # This doesn't depend on interview_call_analysis, so we can still do it
             cartoonize_result = await self._run_with_retry(
                 task_name="image_cartoonization",
                 task_func=self._cartoonize_image,
@@ -114,16 +170,25 @@ class PostCallOrchestrator:
             results["tasks"]["image_cartoonization"] = cartoonize_result
             
             # Task 4: Generate Hedra avatar from cartoonized image
-            hedra_avatar_result = await self._run_with_retry(
-                task_name="hedra_avatar_generation",
-                task_func=self._generate_hedra_avatar,
-                session_id=session_id,
-                max_retries=3,
-                cartoonized_picture_id=cartoonize_result.get("result", {}).get("cartoonized_picture_id") if cartoonize_result.get("status") == "success" else None
-            )
-            results["tasks"]["hedra_avatar_generation"] = hedra_avatar_result
+            # This DEPENDS on interview_call_analysis existing (needs to update it)
+            if transcript_succeeded:
+                hedra_avatar_result = await self._run_with_retry(
+                    task_name="hedra_avatar_generation",
+                    task_func=self._generate_hedra_avatar,
+                    session_id=session_id,
+                    max_retries=3,
+                    cartoonized_picture_id=cartoonize_result.get("result", {}).get("cartoonized_picture_id") if cartoonize_result.get("status") == "success" else None
+                )
+                results["tasks"]["hedra_avatar_generation"] = hedra_avatar_result
+            else:
+                logger.info(f"Skipping hedra_avatar_generation for session {session_id} - interview_call_analysis row does not exist")
+                results["tasks"]["hedra_avatar_generation"] = {
+                    "status": "skipped",
+                    "reason": "transcript_processing_failed"
+                }
             
             # Task 5: Process voice recording for cloning
+            # This doesn't depend on interview_call_analysis, so we can still do it
             voice_cloning_result = await self._run_with_retry(
                 task_name="voice_cloning",
                 task_func=self._process_voice_recording,

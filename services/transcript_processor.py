@@ -244,7 +244,16 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 		else:
 			json_text = response_text.strip()
 		
-		return json.loads(json_text)
+		# Validate JSON before parsing
+		if not json_text:
+			logger.error(f"Empty JSON response from LLM for session. Response text: {response_text[:200]}")
+			raise ValueError("LLM returned empty response")
+		
+		try:
+			return json.loads(json_text)
+		except json.JSONDecodeError as e:
+			logger.error(f"Failed to parse JSON from LLM response. Error: {e}. Response text (first 500 chars): {response_text[:500]}")
+			raise ValueError(f"Invalid JSON from LLM: {str(e)}")
 	
 	def _upload_to_supabase(self, analysis_data: dict, call_data: dict) -> dict:
 		"""
