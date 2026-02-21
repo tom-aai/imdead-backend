@@ -104,7 +104,8 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
             # Step 3: Upload transformed image to Supabase storage
             new_picture_id = self._upload_to_storage(
                 cartoonized_image_path,
-                original_picture_id=picture_id
+                original_picture_id=picture_id,
+                user_id=user_id
             )
             
             # Step 4: Update user_avatar_images with cartoon_id
@@ -276,25 +277,30 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
             )
             raise Exception(f"Gemini transformation failed: {e}")
     
-    def _upload_to_storage(self, image_path: str, original_picture_id: str) -> str:
+    def _upload_to_storage(self, image_path: str, original_picture_id: str, user_id: str) -> str:
         """
         Upload transformed image to Supabase storage.
         
         Args:
             image_path: Path to the transformed image file
             original_picture_id: Original picture ID (for naming)
+            user_id: The user's ID (for directory structure)
             
         Returns:
-            str: New picture_id in storage
+            str: New picture_id in storage (includes user_id prefix)
             
         Raises:
             Exception: If upload fails
         """
         try:
             # Generate new filename based on original
+            # original_picture_id might be just a filename or include a path (e.g., "user-123/uuid.png")
             original_path = Path(original_picture_id)
+            # Get the stem (filename without extension) from the last component
             original_name = original_path.stem
-            new_picture_id = f"{original_name}_cartoon.png"
+            
+            # Store in user's directory: {user_id}/{name}_cartoon.png
+            new_picture_id = f"{user_id}/{original_name}_cartoon.png"
             
             logger.debug(f"Uploading cartoonized image as {new_picture_id}")
             

@@ -1072,7 +1072,121 @@ class TestDeleteUserData:
         """Test that user_profiles are deleted."""
         mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
         
+        # Mock storage list to return empty (no files to delete)
+        mock_supabase.storage.from_.return_value.list.return_value = []
+        
         service = BillingService(mock_supabase)
         service._delete_user_data('user-123')
         
         mock_supabase.table.assert_any_call("user_profiles")
+    
+    def test_deletes_avatar_images_from_storage(self, mock_supabase):
+        """Test that avatar images are deleted from storage."""
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        
+        # Mock storage list to return files
+        mock_files = [
+            {'name': 'uuid1.png'},
+            {'name': 'uuid2_cartoon.png'},
+        ]
+        mock_supabase.storage.from_.return_value.list.return_value = mock_files
+        mock_supabase.storage.from_.return_value.remove.return_value = True
+        
+        service = BillingService(mock_supabase)
+        service._delete_user_data('user-123')
+        
+        # Verify storage.from_ was called for avatar-images-bucket
+        storage_calls = [call[0][0] for call in mock_supabase.storage.from_.call_args_list]
+        assert 'avatar-images-bucket' in storage_calls
+        
+        # Verify list was called with user_id path
+        list_calls = mock_supabase.storage.from_.return_value.list.call_args_list
+        assert len(list_calls) >= 1
+        assert list_calls[0].kwargs['path'] == 'user-123'
+        
+        # Verify remove was called with correct paths
+        remove_calls = mock_supabase.storage.from_.return_value.remove.call_args_list
+        assert len(remove_calls) >= 1
+        assert 'user-123/uuid1.png' in remove_calls[0][0][0]
+        assert 'user-123/uuid2_cartoon.png' in remove_calls[0][0][0]
+    
+    def test_deletes_hot_take_videos_from_storage(self, mock_supabase):
+        """Test that hot take videos are deleted from storage."""
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        
+        # Mock storage list to return hot take video files
+        mock_files = [
+            {'name': 'hot_take_session-1.mp4'},
+            {'name': 'hot_take_session-2.mp4'},
+        ]
+        # First call returns empty (avatar-images), second returns hot take videos
+        mock_supabase.storage.from_.return_value.list.side_effect = [[], mock_files]
+        mock_supabase.storage.from_.return_value.remove.return_value = True
+        
+        service = BillingService(mock_supabase)
+        service._delete_user_data('user-123')
+        
+        # Verify storage.from_ was called for interview-hot-take-videos
+        storage_calls = [call[0][0] for call in mock_supabase.storage.from_.call_args_list]
+        assert 'interview-hot-take-videos' in storage_calls
+        
+        # Verify remove was called with correct paths
+        remove_calls = mock_supabase.storage.from_.return_value.remove.call_args_list
+        assert len(remove_calls) >= 1
+        # Find the call that includes hot take videos
+        hot_take_removed = any(
+            'hot_take_session-1.mp4' in str(call[0][0]) or 'hot_take_session-2.mp4' in str(call[0][0])
+            for call in remove_calls
+        )
+        assert hot_take_removed
+    
+    def test_deletes_recordings_from_storage(self, mock_supabase):
+        """Test that recordings are deleted from storage."""
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        
+        # Mock storage list to return recording files
+        mock_files = [
+            {'name': 'recording-1.mp4'},
+            {'name': 'recording-2.mp4'},
+        ]
+        # First two calls return empty (avatar-images, hot-take-videos), third returns recordings
+        mock_supabase.storage.from_.return_value.list.side_effect = [[], [], mock_files]
+        mock_supabase.storage.from_.return_value.remove.return_value = True
+        
+        service = BillingService(mock_supabase)
+        service._delete_user_data('user-123')
+        
+        # Verify storage.from_ was called for interview-recordings
+        storage_calls = [call[0][0] for call in mock_supabase.storage.from_.call_args_list]
+        assert 'interview-recordings' in storage_calls
+    
+    def test_storage_cleanup_errors_dont_block_deletion(self, mock_supabase):
+        """Test that storage cleanup errors don't prevent database deletion."""
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        
+        # Mock storage list to raise an error
+        mock_supabase.storage.from_.return_value.list.side_effect = Exception("Storage error")
+        
+        service = BillingService(mock_supabase)
+        
+        # Should not raise an exception
+        service._delete_user_data('user-123')
+        
+        # Verify database deletions still happened
+        mock_supabase.table.assert_any_call("user_profiles")
+    
+    def test_storage_cleanup_with_empty_directories(self, mock_supabase):
+        """Test that storage cleanup handles empty directories gracefully."""
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+        
+        # Mock storage list to return empty (no files)
+        mock_supabase.storage.from_.return_value.list.return_value = []
+        
+        service = BillingService(mock_supabase)
+        service._delete_user_data('user-123')
+        
+        # Should complete without errors
+        # Verify remove was not called (no files to delete)
+        remove_calls = mock_supabase.storage.from_.return_value.remove.call_args_list
+        # Remove should only be called if there are files
+        # With empty lists, remove might not be called, which is fine

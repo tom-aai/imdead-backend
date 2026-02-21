@@ -59,7 +59,7 @@ class TestCartoonizeImage:
                 'id': 'record-123',
                 'user_id': 'user-456',
                 'picture_id': 'test-pic.jpg',
-                'cartoon_id': 'test-pic_cartoon.png'
+                'cartoon_id': 'user-456/test-pic_cartoon.png'
             }
         ]
         
@@ -67,7 +67,7 @@ class TestCartoonizeImage:
         mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value.data = [
             {
                 'session_id': 'session-123',
-                'cartoon_id': 'test-pic_cartoon.png'
+                'cartoon_id': 'user-456/test-pic_cartoon.png'
             }
         ]
         
@@ -93,8 +93,14 @@ class TestCartoonizeImage:
                     assert result['status'] == 'success'
                     assert result['user_id'] == 'user-456'
                     assert result['original_picture_id'] == 'test-pic.jpg'
-                    assert result['cartoonized_picture_id'] == 'test-pic_cartoon.png'
+                    assert result['cartoonized_picture_id'] == 'user-456/test-pic_cartoon.png'
                     assert result['session_id'] == 'session-123'
+                    
+                    # Verify upload was called with correct path (includes user_id prefix)
+                    upload_call = mock_supabase.storage.from_.return_value.upload
+                    assert upload_call.called
+                    call_args = upload_call.call_args
+                    assert call_args.kwargs['path'] == 'user-456/test-pic_cartoon.png'
                     
                     # Verify Gemini was called
                     mock_transform.assert_called_once()
@@ -419,10 +425,11 @@ class TestUploadToStorage:
         try:
             result = generator._upload_to_storage(
                 image_path=image_path,
-                original_picture_id='test-pic.jpg'
+                original_picture_id='test-pic.jpg',
+                user_id='user-123'
             )
             
-            assert result == 'test-pic_cartoon.png'
+            assert result == 'user-123/test-pic_cartoon.png'
             
             # Verify storage upload was called correctly
             mock_supabase.storage.from_.assert_called_with("avatar-images-bucket")
@@ -431,7 +438,7 @@ class TestUploadToStorage:
             
             # Check upload parameters
             call_args = upload_call.call_args
-            assert call_args.kwargs['path'] == 'test-pic_cartoon.png'
+            assert call_args.kwargs['path'] == 'user-123/test-pic_cartoon.png'
             assert call_args.kwargs['file_options']['content-type'] == 'image/png'
             assert call_args.kwargs['file_options']['upsert'] == 'true'
             
@@ -440,7 +447,7 @@ class TestUploadToStorage:
                 os.unlink(image_path)
     
     def test_upload_naming_convention(self, mock_supabase, create_test_image):
-        """Test that cartoonized images follow naming convention."""
+        """Test that cartoonized images follow naming convention with user_id prefix."""
         test_image = create_test_image(mode='RGB', size=(100, 100))
         with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
             test_image.save(temp_file, format='PNG')
@@ -450,14 +457,15 @@ class TestUploadToStorage:
         generator = CartoonGenerator(mock_supabase, google_api_key="test-key")
         
         test_cases = [
-            ('picture.jpg', 'picture_cartoon.png'),
-            ('my-photo.png', 'my-photo_cartoon.png'),
-            ('user_123.jpeg', 'user_123_cartoon.png'),
+            ('picture.jpg', 'user-123/picture_cartoon.png'),
+            ('my-photo.png', 'user-123/my-photo_cartoon.png'),
+            ('user_123.jpeg', 'user-123/user_123_cartoon.png'),
+            ('user-456/uuid.png', 'user-123/uuid_cartoon.png'),  # Test with path in original
         ]
         
         try:
             for original_id, expected_cartoon_id in test_cases:
-                result = generator._upload_to_storage(image_path, original_id)
+                result = generator._upload_to_storage(image_path, original_id, user_id='user-123')
                 assert result == expected_cartoon_id
         finally:
             if os.path.exists(image_path):
@@ -477,7 +485,7 @@ class TestUploadToStorage:
         
         try:
             with pytest.raises(Exception, match="Storage upload failed"):
-                generator._upload_to_storage(image_path, 'test-pic.jpg')
+                generator._upload_to_storage(image_path, 'test-pic.jpg', user_id='user-123')
         finally:
             if os.path.exists(image_path):
                 os.unlink(image_path)

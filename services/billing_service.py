@@ -750,14 +750,17 @@ class BillingService:
     
     def _delete_user_data(self, user_id: str) -> None:
         """
-        Delete all user data from the database.
+        Delete all user data from the database and storage.
         
         This performs a cascading delete in the correct order to respect
-        potential foreign key constraints.
+        potential foreign key constraints, and also cleans up storage files.
         
         Args:
             user_id: The user's ID
         """
+        # 0. Delete storage files before database records
+        self._delete_user_storage(user_id)
+        
         # 1. Get all session IDs for this user
         sessions_response = self.supabase.table("interview_calls").select(
             "session_id"
@@ -796,3 +799,71 @@ class BillingService:
             "user_id", user_id
         ).execute()
         logger.info("Deleted user_profiles", user_id=user_id)
+    
+    def _delete_user_storage(self, user_id: str) -> None:
+        """
+        Delete all storage files associated with a user.
+        
+        Deletes files from:
+        - avatar-images-bucket: {user_id}/* (raw and cartoon images)
+        - interview-hot-take-videos: {user_id}/hot_take_*.mp4
+        - interview-recordings: {user_id}/*.mp4
+        
+        Args:
+            user_id: The user's ID
+        """
+        try:
+            # Delete avatar images (raw and cartoon) from avatar-images-bucket
+            try:
+                # List all files in the user's directory
+                files_response = self.supabase.storage.from_("avatar-images-bucket").list(
+                    path=user_id,
+                    options={"limit": 1000, "offset": 0}
+                )
+                
+                if files_response:
+                    # Extract file paths (files_response is a list of file objects with 'name' property)
+                    file_paths = [f"{user_id}/{file['name']}" for file in files_response if file.get('name')]
+                    
+                    if file_paths:
+                        # Delete all files in the user's directory
+                        self.supabase.storage.from_("avatar-images-bucket").remove(file_paths)
+                        logger.info("Deleted avatar images from storage", user_id=user_id, file_count=len(file_paths))
+            except Exception as e:
+                logger.warning(f"Failed to delete avatar images from storage: {e}", user_id=user_id)
+            
+            # Delete hot take videos from interview-hot-take-videos
+            try:
+                files_response = self.supabase.storage.from_("interview-hot-take-videos").list(
+                    path=user_id,
+                    options={"limit": 1000, "offset": 0}
+                )
+                
+                if files_response:
+                    file_paths = [f"{user_id}/{file['name']}" for file in files_response if file.get('name')]
+                    
+                    if file_paths:
+                        self.supabase.storage.from_("interview-hot-take-videos").remove(file_paths)
+                        logger.info("Deleted hot take videos from storage", user_id=user_id, file_count=len(file_paths))
+            except Exception as e:
+                logger.warning(f"Failed to delete hot take videos from storage: {e}", user_id=user_id)
+            
+            # Delete recordings from interview-recordings
+            try:
+                files_response = self.supabase.storage.from_("interview-recordings").list(
+                    path=user_id,
+                    options={"limit": 1000, "offset": 0}
+                )
+                
+                if files_response:
+                    file_paths = [f"{user_id}/{file['name']}" for file in files_response if file.get('name')]
+                    
+                    if file_paths:
+                        self.supabase.storage.from_("interview-recordings").remove(file_paths)
+                        logger.info("Deleted recordings from storage", user_id=user_id, file_count=len(file_paths))
+            except Exception as e:
+                logger.warning(f"Failed to delete recordings from storage: {e}", user_id=user_id)
+                
+        except Exception as e:
+            # Log but don't fail the entire deletion if storage cleanup fails
+            logger.error(f"Error during storage cleanup: {e}", user_id=user_id, exc_info=True)
