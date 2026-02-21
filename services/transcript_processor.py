@@ -200,7 +200,7 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 			"Anthropic LLM call started: transcript_analysis",
 			service="Anthropic",
 			operation="transcript_analysis",
-			model="claude-3-5-haiku-20241022",
+			model="claude-3-5-haiku-latest",
 			transcript_length=len(transcript)
 		)
 		
@@ -208,7 +208,7 @@ Created At: {call_data.get('created_at', 'N/A')}"""
 		
 		# Call Claude API
 		message = self.anthropic.messages.create(
-			model="claude-3-5-haiku-20241022",
+			model="claude-3-5-haiku-latest",
 			max_tokens=4096,
 			messages=[
 				{
