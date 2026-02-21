@@ -421,7 +421,7 @@ class TestProcessWithLLM:
                 # Verify correct model and parameters
                 mock_create.assert_called_once()
                 call_kwargs = mock_create.call_args.kwargs
-                assert call_kwargs['model'] == 'claude-3-5-haiku-latest'
+                assert call_kwargs['model'] == 'claude-haiku-4-5'
                 assert call_kwargs['max_tokens'] == 4096
     
     def test_llm_processing_returns_conversation_summary(self, mock_supabase):

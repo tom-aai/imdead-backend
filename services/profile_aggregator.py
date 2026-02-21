@@ -167,7 +167,7 @@ class ProfileAggregator:
 		
 		# Call Claude API
 		message = self.anthropic.messages.create(
-			model="claude-3-5-haiku-latest",
+			model="claude-haiku-4-5",
 			max_tokens=8192,
 			messages=[
 				{
