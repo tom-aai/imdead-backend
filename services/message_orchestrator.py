@@ -245,6 +245,13 @@ class MessageOrchestrator:
     def _notify_seeker_of_answer(self, message: Dict[str, Any], source_session_id: str) -> None:
         """Send email to seeker that their question was answered."""
         try:
+            seeker_user_id = message.get("seeker_user_id")
+            
+            # Skip email notification for anonymous/public sessions (no user ID to email)
+            if not seeker_user_id:
+                logger.info(f"Skipping email notification - anonymous/public session (no seeker_user_id)")
+                return
+            
             # Get share token for the source session
             response = self.supabase.table("avatar_share_tokens")\
                 .select("share_token")\
@@ -272,7 +279,7 @@ class MessageOrchestrator:
                 expert_name = f"{first} {last}".strip() or "the expert"
             
             self.email_service.send_seeker_chat_updated(
-                seeker_user_id=message.get("seeker_user_id"),
+                seeker_user_id=seeker_user_id,
                 expert_name=expert_name,
                 share_token=share_token
             )

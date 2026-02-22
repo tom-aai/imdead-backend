@@ -10,7 +10,7 @@ import logging
 import json
 import subprocess
 import tempfile
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -22,18 +22,35 @@ class CaptionGenerator:
         """Initialize the caption generator."""
         pass
     
+    # Directory containing the bundled Liberation Sans Bold font
+    _BUNDLED_FONTS_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fonts"
+    )
+    _BUNDLED_FONT_FILE = os.path.join(_BUNDLED_FONTS_DIR, "LiberationSans-Bold.ttf")
+    _BUNDLED_FONT_NAME = "Liberation Sans"
+
     def _get_font_info(self) -> tuple:
         """
         Get the path and ASS family name for a suitable bold caption font.
 
-        Checks common macOS and Linux font locations, then falls back to
-        fontconfig's ``fc-match`` so it works on any platform (including
-        Render's Linux-based build environment).
+        Checks (in order):
+        1. Bundled font shipped with this repo (``fonts/LiberationSans-Bold.ttf``)
+        2. Common macOS system font locations
+        3. Common Linux system font locations
+        4. ``fc-match`` via fontconfig as a last-resort fallback
 
         Returns:
             tuple[str, str]: (font_file_path, ass_font_family_name)
         """
-        # (path, ASS family name) pairs – order reflects preference
+        # --- 1. Bundled font (works everywhere – no system install needed) ---
+        if os.path.exists(self._BUNDLED_FONT_FILE):
+            logger.info(
+                f"Using bundled font: {self._BUNDLED_FONT_FILE} "
+                f"({self._BUNDLED_FONT_NAME})"
+            )
+            return self._BUNDLED_FONT_FILE, self._BUNDLED_FONT_NAME
+
+        # --- 2 & 3. System font paths (macOS + Linux) ---
         font_options = [
             # macOS
             ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", "Arial Bold"),
@@ -58,7 +75,7 @@ class CaptionGenerator:
                 logger.info(f"Using font: {font_path} ({font_name})")
                 return font_path, font_name
 
-        # Fall back to fontconfig (available on most Linux/macOS systems)
+        # --- 4. fontconfig fallback ---
         try:
             result = subprocess.run(
                 ["fc-match", "-f", "%{file}:%{family}", ":bold"],
@@ -69,7 +86,6 @@ class CaptionGenerator:
             if result.returncode == 0 and ":" in result.stdout:
                 parts = result.stdout.strip().split(":", 1)
                 fc_path = parts[0].strip()
-                # fc-match may return a comma-separated list of family names
                 fc_name = parts[1].split(",")[0].strip() if parts[1] else "Sans"
                 if os.path.exists(fc_path):
                     logger.info(f"Found font via fc-match: {fc_path} ({fc_name})")
@@ -78,14 +94,20 @@ class CaptionGenerator:
             logger.debug(f"fc-match lookup failed: {e}")
 
         raise FileNotFoundError(
-            "Could not find a suitable font file. "
-            "On Linux, install one with: apt-get install -y fonts-liberation"
+            "Could not find a suitable font file. The bundled font at "
+            f"{self._BUNDLED_FONT_FILE} is missing and no system fonts were found."
         )
 
-    # ---------------------------------------------------------------------------
-    # Keep a thin compatibility shim so any external callers of _get_font_path
-    # that only need the path still work.
-    # ---------------------------------------------------------------------------
+    def _get_fonts_dir(self) -> str:
+        """Return the directory that contains the font used by ``_get_font_info``.
+
+        This is passed to ffmpeg's ``subtitles`` filter via the ``fontsdir``
+        option so that libass can discover the bundled font by family name.
+        """
+        font_path, _ = self._get_font_info()
+        return os.path.dirname(font_path)
+
+    # Thin compatibility shim for any callers that only need the file path.
     def _get_font_path(self) -> str:
         """Return just the font file path (compatibility wrapper)."""
         font_path, _ = self._get_font_info()
@@ -381,11 +403,16 @@ class CaptionGenerator:
             logger.debug(f"Created ASS subtitle file: {ass_file.name}")
             
             # Build ffmpeg command using subtitles filter
-            # The subtitles filter burns ASS subtitles into the video
+            # The subtitles filter burns ASS subtitles into the video.
+            # fontsdir tells libass where to find our bundled font by family name.
+            fonts_dir = self._get_fonts_dir()
+            subtitle_filter = (
+                f"subtitles={ass_file.name}:fontsdir={fonts_dir}"
+            )
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
-                '-vf', f"subtitles={ass_file.name}",
+                '-vf', subtitle_filter,
                 '-codec:a', 'copy',  # Copy audio stream as-is
                 '-codec:v', 'libx264',
                 '-crf', '18',  # High quality
@@ -542,10 +569,14 @@ class CaptionGenerator:
             logger.debug(f"Created simple ASS subtitle file: {ass_file.name}")
             
             # Build and run ffmpeg command
+            fonts_dir = self._get_fonts_dir()
+            subtitle_filter = (
+                f"subtitles={ass_file.name}:fontsdir={fonts_dir}"
+            )
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
-                '-vf', f"subtitles={ass_file.name}",
+                '-vf', subtitle_filter,
                 '-codec:a', 'copy',
                 '-codec:v', 'libx264',
                 '-crf', '18',
