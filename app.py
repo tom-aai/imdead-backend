@@ -512,8 +512,8 @@ def upload_avatar_image_endpoint():
 		if file_ext not in allowed_extensions:
 			return jsonify({"error": f"File type not allowed. Allowed types: {', '.join(allowed_extensions)}"}), 400
 		
-		# Generate a unique picture_id (flat structure, no subdirectories)
-		picture_id = f"{uuid.uuid4()}.{file_ext}"
+		# Generate a unique picture_id within the user's directory: {user_id}/{uuid}.{ext}
+		picture_id = f"{user_id}/{uuid.uuid4()}.{file_ext}"
 		
 		# Upload to Supabase storage
 		file_data = file.read()
