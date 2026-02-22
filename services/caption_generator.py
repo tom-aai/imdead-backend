@@ -22,33 +22,74 @@ class CaptionGenerator:
         """Initialize the caption generator."""
         pass
     
-    def _get_font_path(self) -> str:
+    def _get_font_info(self) -> tuple:
         """
-        Get the path to a suitable font for captions.
-        
-        On macOS, tries to find Arial Bold or falls back to other available fonts.
-        
+        Get the path and ASS family name for a suitable bold caption font.
+
+        Checks common macOS and Linux font locations, then falls back to
+        fontconfig's ``fc-match`` so it works on any platform (including
+        Render's Linux-based build environment).
+
         Returns:
-            str: Path to a font file that can be used with ffmpeg drawtext
+            tuple[str, str]: (font_file_path, ass_font_family_name)
         """
-        # List of font paths to try (in order of preference)
-        font_paths = [
-            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-            "/Library/Fonts/Arial Bold.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",
-            "/System/Library/Fonts/Supplemental/Helvetica.ttc",
-            "/System/Library/Fonts/SFNS.ttf",
+        # (path, ASS family name) pairs – order reflects preference
+        font_options = [
+            # macOS
+            ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", "Arial Bold"),
+            ("/Library/Fonts/Arial Bold.ttf", "Arial Bold"),
+            ("/System/Library/Fonts/Helvetica.ttc", "Helvetica"),
+            ("/System/Library/Fonts/Supplemental/Helvetica.ttc", "Helvetica"),
+            ("/System/Library/Fonts/SFNS.ttf", "SF Pro"),
+            # Linux – Liberation fonts (metrically compatible with Arial)
+            ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", "Liberation Sans"),
+            ("/usr/share/fonts/liberation/LiberationSans-Bold.ttf", "Liberation Sans"),
+            # Linux – DejaVu fonts (widely available)
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "DejaVu Sans"),
+            ("/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf", "DejaVu Sans"),
+            # Linux – Ubuntu fonts
+            ("/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf", "Ubuntu"),
+            # Linux – GNU FreeFont
+            ("/usr/share/fonts/truetype/freefont/FreeSansBold.ttf", "FreeSans"),
         ]
-        
-        for font_path in font_paths:
+
+        for font_path, font_name in font_options:
             if os.path.exists(font_path):
-                logger.info(f"Using font: {font_path}")
-                return font_path
-        
-        # If no fonts found, raise an error
+                logger.info(f"Using font: {font_path} ({font_name})")
+                return font_path, font_name
+
+        # Fall back to fontconfig (available on most Linux/macOS systems)
+        try:
+            result = subprocess.run(
+                ["fc-match", "-f", "%{file}:%{family}", ":bold"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and ":" in result.stdout:
+                parts = result.stdout.strip().split(":", 1)
+                fc_path = parts[0].strip()
+                # fc-match may return a comma-separated list of family names
+                fc_name = parts[1].split(",")[0].strip() if parts[1] else "Sans"
+                if os.path.exists(fc_path):
+                    logger.info(f"Found font via fc-match: {fc_path} ({fc_name})")
+                    return fc_path, fc_name
+        except Exception as e:
+            logger.debug(f"fc-match lookup failed: {e}")
+
         raise FileNotFoundError(
-            "Could not find a suitable font file. Please ensure Arial Bold or Helvetica is installed."
+            "Could not find a suitable font file. "
+            "On Linux, install one with: apt-get install -y fonts-liberation"
         )
+
+    # ---------------------------------------------------------------------------
+    # Keep a thin compatibility shim so any external callers of _get_font_path
+    # that only need the path still work.
+    # ---------------------------------------------------------------------------
+    def _get_font_path(self) -> str:
+        """Return just the font file path (compatibility wrapper)."""
+        font_path, _ = self._get_font_info()
+        return font_path
     
     def _group_words_into_phrases(
         self,
@@ -132,9 +173,8 @@ class CaptionGenerator:
         """
         logger.debug(f"Generating ASS subtitles for {len(word_timestamps)} words (video dimensions: {video_width}x{video_height})")
         
-        # Get font path (just the filename for ASS)
-        font_path = self._get_font_path()
-        font_name = os.path.basename(font_path).replace('.ttf', '').replace('.ttc', '')
+        # Get font info for ASS style definition
+        _, font_name = self._get_font_info()
         logger.debug(f"Using font: {font_name}")
         
         # ASS color format is &H00BBGGRR (BGR, not RGB)
@@ -459,8 +499,7 @@ class CaptionGenerator:
             phrases = self._group_words_into_phrases(word_timestamps, words_per_line)
             
             # Generate simple ASS content (no karaoke effects)
-            font_path = self._get_font_path()
-            font_name = os.path.basename(font_path).replace('.ttf', '').replace('.ttc', '')
+            _, font_name = self._get_font_info()
             
             ass_content = [
                 "[Script Info]",
