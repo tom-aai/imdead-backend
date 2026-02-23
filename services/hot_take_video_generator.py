@@ -16,7 +16,6 @@ import base64
 from pathlib import Path
 from typing import List, Dict, Tuple
 import requests
-from cartesia import Cartesia
 
 # Import CaptionGenerator for adding captions
 from .caption_generator import CaptionGenerator
@@ -67,9 +66,12 @@ class HotTakeVideoGenerationService:
         self.supabase = supabase_client
         self.tts_provider = tts_provider
         
-        # Cartesia setup
+        # Cartesia setup (deferred import to reduce baseline memory)
         self.cartesia_api_key = cartesia_api_key or os.getenv("CARTESIA_API_KEY")
-        self.cartesia = Cartesia(api_key=self.cartesia_api_key) if self.cartesia_api_key else None
+        self.cartesia = None
+        if self.cartesia_api_key and self.tts_provider == "cartesia":
+            from cartesia import Cartesia
+            self.cartesia = Cartesia(api_key=self.cartesia_api_key)
         
         # Inworld setup
         self.inworld_api_key = inworld_api_key or os.getenv("INWORLD_API_KEY")
@@ -208,16 +210,18 @@ class HotTakeVideoGenerationService:
             json.dump(word_timestamps, f, indent=2)
         
         # Step 7: Optionally add captions using CaptionGenerator
+        # Crop + caption are combined into a single ffmpeg pass to reduce peak memory
         if add_captions:
-            logger.info(f"Adding captions to hot take video")
+            logger.info(f"Adding captions to hot take video (with crop to {aspect_ratio})")
             
             try:
-                # Use CaptionGenerator to add captions with word-by-word highlighting
+                # Use CaptionGenerator to crop + add captions in one ffmpeg pass
                 captioned_video_path = self.caption_generator.add_captions_to_video(
                     video_path=temp_video_path,
                     audio_path=audio_path,
                     timestamps_path=timestamps_path,
-                    output_path=None  # Will auto-generate output path
+                    output_path=None,  # Will auto-generate output path
+                    crop_to_aspect_ratio=aspect_ratio  # Combined crop+caption in one pass
                 )
                 
                 # Move the captioned video to the final output location
@@ -242,30 +246,25 @@ class HotTakeVideoGenerationService:
                 
             except Exception as e:
                 logger.error(f"Failed to add captions: {e}")
-                logger.warning(f"Falling back to video without captions")
+                logger.warning(f"Falling back to video without captions (crop only)")
                 
-                # Save video without captions
+                # Crop only (no captions) as fallback
                 video_path = os.path.join(output_dir, f"{base_filename}.mp4")
-                if temp_video_path != video_path:
-                    import shutil
-                    shutil.copy2(temp_video_path, video_path)
-                    try:
-                        os.unlink(temp_video_path)
-                    except Exception as e:
-                        logger.warning(f"Failed to clean up temp video: {e}")
+                self._crop_video_to_9_16(temp_video_path, video_path)
+                try:
+                    os.unlink(temp_video_path)
+                except Exception as e2:
+                    logger.warning(f"Failed to clean up temp video: {e2}")
                 
                 message = f"Hot take video generated (captions failed, video without captions)"
         else:
-            # Save video without captions
+            # Crop only (no captions)
             video_path = os.path.join(output_dir, f"{base_filename}.mp4")
-            if temp_video_path != video_path:
-                import shutil
-                shutil.copy2(temp_video_path, video_path)
-                # Clean up temp video
-                try:
-                    os.unlink(temp_video_path)
-                except Exception as e:
-                    logger.warning(f"Failed to clean up temp video: {e}")
+            self._crop_video_to_9_16(temp_video_path, video_path)
+            try:
+                os.unlink(temp_video_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up temp video: {e}")
             
             message = f"Hot take video generated (without captions)"
         
@@ -769,27 +768,14 @@ class HotTakeVideoGenerationService:
             if not status_data.get("download_url"):
                 raise Exception("No download URL found in the response")
             
-            # Download to a temporary file first
-            temp_download_path = os.path.join(
+            # Download the raw video (cropping is deferred to caption/post-processing
+            # step so we can do crop+caption in a single ffmpeg pass, reducing peak memory)
+            output_path = os.path.join(
                 tempfile.gettempdir(),
                 f"hot_take_video_{session_id}_raw.mp4"
             )
             
-            self._download_video(status_data["download_url"], temp_download_path)
-            
-            # Step 5: Crop video to 9:16 aspect ratio for social media
-            output_filename = os.path.join(
-                tempfile.gettempdir(),
-                f"hot_take_video_{session_id}.mp4"
-            )
-            
-            self._crop_video_to_9_16(temp_download_path, output_filename)
-            
-            # Clean up the raw downloaded video
-            try:
-                os.unlink(temp_download_path)
-            except Exception as e:
-                logger.warning(f"Failed to clean up raw video: {e}")
+            self._download_video(status_data["download_url"], output_path)
             
             duration_ms = int((time.time() - video_start) * 1000)
             logger.info(
@@ -799,7 +785,7 @@ class HotTakeVideoGenerationService:
                 duration_ms=duration_ms,
                 status="success"
             )
-            return output_filename
+            return output_path
             
         except Exception as e:
             duration_ms = int((time.time() - video_start) * 1000)
@@ -938,22 +924,19 @@ class HotTakeVideoGenerationService:
         try:
             storage_path = f"{user_id}/hot_take_{session_id}.mp4"
             
-            logger.debug(f"Uploading video to Supabase storage: {storage_path}")
+            file_size_mb = os.path.getsize(video_path) / 1024 / 1024
+            logger.debug(f"Uploading video to Supabase storage: {storage_path} ({file_size_mb:.1f} MB)")
             
-            # Read the video file
+            # Upload using file handle to avoid loading entire video into memory
             with open(video_path, "rb") as f:
-                video_data = f.read()
-            
-            # Upload to Supabase storage
-            # Using the storage API to upload to the interview-hot-take-videos bucket
-            response = self.supabase.storage.from_("interview-hot-take-videos").upload(
-                path=storage_path,
-                file=video_data,
-                file_options={
-                    "content-type": "video/mp4",
-                    "upsert": "true"  # Overwrite if exists
-                }
-            )
+                response = self.supabase.storage.from_("interview-hot-take-videos").upload(
+                    path=storage_path,
+                    file=f,
+                    file_options={
+                        "content-type": "video/mp4",
+                        "upsert": "true"  # Overwrite if exists
+                    }
+                )
             
             logger.debug(f"Video uploaded to storage: {storage_path}")
             return storage_path
@@ -1102,8 +1085,8 @@ class HotTakeVideoGenerationService:
                 '-vf', crop_filter,
                 '-codec:a', 'copy',  # Copy audio stream as-is
                 '-codec:v', 'libx264',
-                '-crf', '18',  # High quality
-                '-preset', 'medium',
+                '-crf', '23',  # Good quality, lower memory than CRF 18
+                '-preset', 'fast',  # Lower memory usage than 'medium'
                 '-y',  # Overwrite output file
                 output_path
             ]

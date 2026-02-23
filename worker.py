@@ -11,6 +11,7 @@ Run this as a separate service (e.g., Render Background Worker):
     python worker.py
 """
 
+import gc
 import os
 import sys
 import time
@@ -19,13 +20,9 @@ from datetime import datetime, UTC
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-# Import services
-from services.post_call_orchestrator import PostCallOrchestrator
-from services.hot_take_video_generator import HotTakeVideoGenerationService
-from services.voice_cloner import VoiceCloningService
-from services.transcript_processor import TranscriptProcessor
-from services.email_service import EmailService
-from services.message_orchestrator import MessageOrchestrator
+# Service imports are deferred to reduce baseline memory on constrained instances.
+# Each service (and its heavy dependencies like cartesia, google.genai, PIL, anthropic)
+# is imported lazily when the corresponding job type is first processed.
 from services.logging_config import (
     configure_logging,
     get_logger,
@@ -67,46 +64,81 @@ class JobWorker:
     """Worker for processing background jobs from Supabase queue."""
     
     def __init__(self):
-        """Initialize the worker with Supabase client and services."""
+        """Initialize the worker with Supabase client.
+        
+        Services are initialized lazily on first use to reduce baseline memory.
+        On a 512 MB Render instance, eager initialization of all services and their
+        heavy dependencies (cartesia, google.genai, PIL, anthropic) leaves too little
+        headroom for ffmpeg video processing.
+        """
         self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        self.orchestrator = PostCallOrchestrator(
-            supabase_client=self.supabase,
-            anthropic_api_key=ANTHROPIC_API_KEY,
-            hedra_api_key=HEDRA_API_KEY,
-            cartesia_api_key=CARTESIA_API_KEY,
-            google_api_key=GOOGLE_API_KEY,
-            inworld_api_key=INWORLD_API_KEY,
-            inworld_workspace_id=INWORLD_WORKSPACE_ID
-        )
-        self.hot_take_service = HotTakeVideoGenerationService(
-            supabase_client=self.supabase,
-            tts_provider=VOICE_PROVIDER,
-            cartesia_api_key=CARTESIA_API_KEY,
-            inworld_api_key=INWORLD_API_KEY,
-            hedra_api_key=HEDRA_API_KEY
-        )
-        self.voice_cloning_service = VoiceCloningService(
-            supabase_client=self.supabase,
-            voice_provider=VOICE_PROVIDER,
-            cartesia_api_key=CARTESIA_API_KEY,
-            inworld_api_key=INWORLD_API_KEY,
-            inworld_workspace_id=INWORLD_WORKSPACE_ID
-        )
-        self.transcript_processor = TranscriptProcessor(
-            supabase_client=self.supabase,
-            anthropic_api_key=ANTHROPIC_API_KEY
-        )
-        self.email_service = EmailService(
-            supabase_client=self.supabase,
-            resend_api_key=RESEND_API_KEY
-        )
-        self.message_orchestrator = MessageOrchestrator(
-            supabase_client=self.supabase,
-            email_service=self.email_service,
-            anthropic_api_key=ANTHROPIC_API_KEY
-        )
+        self._services_cache = {}
         self.worker_id = os.getenv('RENDER_INSTANCE_ID', f'worker-{os.getpid()}')
         logger.info(f"Worker initialized with ID: {self.worker_id}")
+    
+    def _get_service(self, name: str):
+        """Lazily initialize and cache a service by name.
+        
+        Imports are deferred so that only the libraries needed for the current
+        job type are loaded into memory.
+        """
+        if name in self._services_cache:
+            return self._services_cache[name]
+        
+        if name == 'orchestrator':
+            from services.post_call_orchestrator import PostCallOrchestrator
+            service = PostCallOrchestrator(
+                supabase_client=self.supabase,
+                anthropic_api_key=ANTHROPIC_API_KEY,
+                hedra_api_key=HEDRA_API_KEY,
+                cartesia_api_key=CARTESIA_API_KEY,
+                google_api_key=GOOGLE_API_KEY,
+                inworld_api_key=INWORLD_API_KEY,
+                inworld_workspace_id=INWORLD_WORKSPACE_ID
+            )
+        elif name == 'hot_take_service':
+            from services.hot_take_video_generator import HotTakeVideoGenerationService
+            service = HotTakeVideoGenerationService(
+                supabase_client=self.supabase,
+                tts_provider=VOICE_PROVIDER,
+                cartesia_api_key=CARTESIA_API_KEY,
+                inworld_api_key=INWORLD_API_KEY,
+                hedra_api_key=HEDRA_API_KEY
+            )
+        elif name == 'voice_cloning_service':
+            from services.voice_cloner import VoiceCloningService
+            service = VoiceCloningService(
+                supabase_client=self.supabase,
+                voice_provider=VOICE_PROVIDER,
+                cartesia_api_key=CARTESIA_API_KEY,
+                inworld_api_key=INWORLD_API_KEY,
+                inworld_workspace_id=INWORLD_WORKSPACE_ID
+            )
+        elif name == 'transcript_processor':
+            from services.transcript_processor import TranscriptProcessor
+            service = TranscriptProcessor(
+                supabase_client=self.supabase,
+                anthropic_api_key=ANTHROPIC_API_KEY
+            )
+        elif name == 'email_service':
+            from services.email_service import EmailService
+            service = EmailService(
+                supabase_client=self.supabase,
+                resend_api_key=RESEND_API_KEY
+            )
+        elif name == 'message_orchestrator':
+            from services.message_orchestrator import MessageOrchestrator
+            email_svc = self._get_service('email_service')
+            service = MessageOrchestrator(
+                supabase_client=self.supabase,
+                email_service=email_svc,
+                anthropic_api_key=ANTHROPIC_API_KEY
+            )
+        else:
+            raise ValueError(f"Unknown service: {name}")
+        
+        self._services_cache[name] = service
+        return service
     
     def process_job(self, job: dict) -> None:
         """
@@ -138,10 +170,10 @@ class JobWorker:
         )
         
         try:
-            # Route based on job_type
+            # Route based on job_type (services are lazily initialized on first use)
             if job_type == 'hot_take':
                 # Hot take video generation
-                result = self.hot_take_service.generate_hot_take_video(
+                result = self._get_service('hot_take_service').generate_hot_take_video(
                     session_id=session_id
                 )
             elif job_type == 'avatar_update':
@@ -152,7 +184,7 @@ class JobWorker:
                 if not user_id or not picture_id:
                     raise ValueError("avatar_update job requires user_id and picture_id in job_data")
                 
-                result = asyncio.run(self.orchestrator.process_avatar_update(
+                result = asyncio.run(self._get_service('orchestrator').process_avatar_update(
                     session_id=session_id,
                     user_id=user_id,
                     picture_id=picture_id
@@ -172,7 +204,7 @@ class JobWorker:
                     raise Exception(f"Failed to download audio from {audio_path}")
                 
                 # Clone voice
-                result = self.voice_cloning_service.clone_voice_from_audio_data(
+                result = self._get_service('voice_cloning_service').clone_voice_from_audio_data(
                     user_id=user_id,
                     audio_data=audio_data
                 )
@@ -190,19 +222,19 @@ class JobWorker:
                 if not original_session_id:
                     raise ValueError("resume_session job requires original_session_id in job_data")
                 
-                result = self.transcript_processor.append_to_transcript(
+                result = self._get_service('transcript_processor').append_to_transcript(
                     original_session_id=original_session_id,
                     new_session_id=session_id
                 )
             elif job_type == 'message_notification':
                 # Send notification emails to experts about new messages
-                result = self.message_orchestrator.process_message_notifications()
+                result = self._get_service('message_orchestrator').process_message_notifications()
             elif job_type == 'mail_session':
                 # Process mail agent session - handle answered questions and intros
-                result = self.message_orchestrator.process_mail_session(session_id, job_data)
+                result = self._get_service('message_orchestrator').process_mail_session(session_id, job_data)
             else:
                 # Default: post-call orchestration
-                result = asyncio.run(self.orchestrator.process_call_completion(session_id))
+                result = asyncio.run(self._get_service('orchestrator').process_call_completion(session_id))
             
             # Mark job as completed
             duration_ms = int((time.time() - start_time) * 1000)
@@ -275,6 +307,8 @@ class JobWorker:
         finally:
             # Clear job context after processing
             clear_context()
+            # Free memory after each job to stay within instance limits
+            gc.collect()
     
     def claim_job(self) -> dict | None:
         """

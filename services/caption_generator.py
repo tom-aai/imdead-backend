@@ -112,7 +112,51 @@ class CaptionGenerator:
         """Return just the font file path (compatibility wrapper)."""
         font_path, _ = self._get_font_info()
         return font_path
-    
+
+    def _calculate_crop_filter(
+        self,
+        input_width: int,
+        input_height: int,
+        target_aspect_ratio: str
+    ) -> tuple:
+        """
+        Calculate ffmpeg crop filter parameters for a target aspect ratio.
+
+        Args:
+            input_width: Width of the input video
+            input_height: Height of the input video
+            target_aspect_ratio: Target aspect ratio as "W:H" (e.g., "9:16")
+
+        Returns:
+            tuple: (crop_filter_string, output_width, output_height)
+                   or (None, input_width, input_height) if no crop needed
+        """
+        parts = target_aspect_ratio.split(":")
+        target_w, target_h = int(parts[0]), int(parts[1])
+        target_aspect = target_w / target_h
+        input_aspect = input_width / input_height
+
+        if abs(input_aspect - target_aspect) < 0.01:
+            return None, input_width, input_height
+
+        if input_aspect > target_aspect:
+            # Video is wider than target, crop width (center crop)
+            new_width = int(input_height * target_aspect)
+            new_width = new_width - (new_width % 2)  # Ensure even
+            new_height = input_height
+            x_offset = (input_width - new_width) // 2
+            y_offset = 0
+        else:
+            # Video is taller than target, crop height (center crop)
+            new_width = input_width
+            new_height = int(input_width / target_aspect)
+            new_height = new_height - (new_height % 2)  # Ensure even
+            x_offset = 0
+            y_offset = (input_height - new_height) // 2
+
+        crop_filter = f"crop={new_width}:{new_height}:{x_offset}:{y_offset}"
+        return crop_filter, new_width, new_height
+
     def _group_words_into_phrases(
         self,
         word_timestamps: List[Dict],
@@ -314,7 +358,8 @@ class CaptionGenerator:
         video_path: str,
         audio_path: str,
         timestamps_path: str,
-        output_path: str = None
+        output_path: str = None,
+        crop_to_aspect_ratio: str = None
     ) -> str:
         """
         Add word-highlighted captions to a video using ASS subtitles with karaoke effects.
@@ -324,6 +369,9 @@ class CaptionGenerator:
             audio_path: Path to the audio file (for reference, not used directly)
             timestamps_path: Path to the JSON file with word timestamps
             output_path: Path for the output video (optional, auto-generated if not provided)
+            crop_to_aspect_ratio: Optional aspect ratio to crop to (e.g., "9:16").
+                If provided, cropping and captioning are done in a single ffmpeg pass
+                to reduce peak memory usage.
             
         Returns:
             str: Path to the captioned video file
@@ -381,7 +429,16 @@ class CaptionGenerator:
                 video_duration = float(probe_data['format']['duration']) if 'format' in probe_data and 'duration' in probe_data['format'] else None
                 logger.debug(f"Video dimensions: {video_width}x{video_height}, duration: {video_duration:.2f}s" if video_duration else f"Video dimensions: {video_width}x{video_height}")
             
-            # Generate ASS subtitle content
+            # Calculate crop filter if requested (dimensions used for ASS must be post-crop)
+            crop_filter = None
+            if crop_to_aspect_ratio:
+                crop_filter, video_width, video_height = self._calculate_crop_filter(
+                    video_width, video_height, crop_to_aspect_ratio
+                )
+                if crop_filter:
+                    logger.debug(f"Will crop to {crop_to_aspect_ratio}: {crop_filter} -> {video_width}x{video_height}")
+            
+            # Generate ASS subtitle content (uses post-crop dimensions)
             
             ass_content = self._generate_ass_subtitles(
                 word_timestamps,
@@ -409,14 +466,21 @@ class CaptionGenerator:
             subtitle_filter = (
                 f"subtitles={ass_file.name}:fontsdir={fonts_dir}"
             )
+            
+            # Combine crop + subtitle into a single filter chain if cropping
+            if crop_filter:
+                video_filter = f"{crop_filter},{subtitle_filter}"
+            else:
+                video_filter = subtitle_filter
+            
             cmd = [
                 'ffmpeg',
                 '-i', video_path,
-                '-vf', subtitle_filter,
+                '-vf', video_filter,
                 '-codec:a', 'copy',  # Copy audio stream as-is
                 '-codec:v', 'libx264',
-                '-crf', '18',  # High quality
-                '-preset', 'medium',
+                '-crf', '23',  # Good quality, lower memory than CRF 18
+                '-preset', 'fast',  # Lower memory usage than 'medium'
                 '-y',  # Overwrite output file
                 output_path
             ]
@@ -579,8 +643,8 @@ class CaptionGenerator:
                 '-vf', subtitle_filter,
                 '-codec:a', 'copy',
                 '-codec:v', 'libx264',
-                '-crf', '18',
-                '-preset', 'medium',
+                '-crf', '23',
+                '-preset', 'fast',
                 '-y',
                 output_path
             ]
