@@ -98,7 +98,7 @@ services:
       - key: WORKER_POLL_INTERVAL
         value: 5  # Poll every 5 seconds
       - key: STUCK_JOB_TIMEOUT
-        value: 30  # Reset jobs stuck for 30+ minutes
+        value: 5  # Reset jobs stuck for 5+ minutes (short for fast OOM recovery)
 
   # Next.js Frontend
   - type: web

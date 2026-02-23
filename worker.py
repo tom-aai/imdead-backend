@@ -52,7 +52,7 @@ VOICE_PROVIDER = os.getenv("VOICE_PROVIDER", "inworld")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
 POLL_INTERVAL = int(os.getenv("WORKER_POLL_INTERVAL", "5"))  # seconds
-STUCK_JOB_TIMEOUT = int(os.getenv("STUCK_JOB_TIMEOUT", "30"))  # minutes
+STUCK_JOB_TIMEOUT = int(os.getenv("STUCK_JOB_TIMEOUT", "5"))  # minutes (short so OOM-crashed jobs recover quickly)
 
 # Validate required environment variables
 if not all([SUPABASE_URL, SUPABASE_KEY]):
