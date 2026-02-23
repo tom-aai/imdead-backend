@@ -106,7 +106,6 @@ services:
     env: node
     region: oregon
     plan: free  # or starter ($7/month)
-    rootDir: expertavatar-interview/expertavatar-interview-frontend
     buildCommand: pnpm install && pnpm build
     startCommand: pnpm start
     envVars:
