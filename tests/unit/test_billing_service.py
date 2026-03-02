@@ -245,7 +245,7 @@ class TestGetUsageInfo:
             
             assert result.is_admin is True
             assert result.is_exceeded is False
-            assert result.remaining_seconds == float('inf')
+            assert result.remaining_seconds is None
     
     def test_paid_user_unlimited(self, mock_supabase):
         """Test that paid users have unlimited access."""
@@ -260,7 +260,7 @@ class TestGetUsageInfo:
                 
                 assert result.is_paid is True
                 assert result.is_exceeded is False
-                assert result.remaining_seconds == float('inf')
+                assert result.remaining_seconds is None
                 assert result.used_seconds == 5000.0
     
     def test_free_user_under_limit(self, mock_supabase):
@@ -322,8 +322,8 @@ class TestCanStartSession:
         
         with patch.object(service, 'get_usage_info', return_value=UsageInfo(
             used_seconds=0,
-            free_tier_seconds=float('inf'),
-            remaining_seconds=float('inf'),
+            free_tier_seconds=None,
+            remaining_seconds=None,
             usage_percentage=0,
             is_exceeded=False,
             is_warning=False,
@@ -343,7 +343,7 @@ class TestCanStartSession:
         with patch.object(service, 'get_usage_info', return_value=UsageInfo(
             used_seconds=10000,
             free_tier_seconds=FREE_TIER_SECONDS,
-            remaining_seconds=float('inf'),
+            remaining_seconds=None,
             usage_percentage=0,
             is_exceeded=False,
             is_warning=False,

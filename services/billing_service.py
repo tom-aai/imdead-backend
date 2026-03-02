@@ -24,8 +24,8 @@ WARNING_THRESHOLD = 0.8
 class UsageInfo:
     """Usage information for a user."""
     used_seconds: float
-    free_tier_seconds: float
-    remaining_seconds: float
+    free_tier_seconds: Optional[float]
+    remaining_seconds: Optional[float]
     usage_percentage: float
     is_exceeded: bool
     is_warning: bool
@@ -38,9 +38,9 @@ class UsageInfo:
             "used_seconds": self.used_seconds,
             "used_minutes": round(self.used_seconds / 60, 1),
             "free_tier_seconds": self.free_tier_seconds,
-            "free_tier_minutes": round(self.free_tier_seconds / 60, 1),
+            "free_tier_minutes": round(self.free_tier_seconds / 60, 1) if self.free_tier_seconds is not None else None,
             "remaining_seconds": self.remaining_seconds,
-            "remaining_minutes": round(self.remaining_seconds / 60, 1),
+            "remaining_minutes": round(self.remaining_seconds / 60, 1) if self.remaining_seconds is not None else None,
             "usage_percentage": round(self.usage_percentage * 100, 1),
             "is_exceeded": self.is_exceeded,
             "is_warning": self.is_warning,
@@ -183,8 +183,8 @@ class BillingService:
         if is_admin:
             return UsageInfo(
                 used_seconds=0,
-                free_tier_seconds=float('inf'),
-                remaining_seconds=float('inf'),
+                free_tier_seconds=None,
+                remaining_seconds=None,
                 usage_percentage=0,
                 is_exceeded=False,
                 is_warning=False,
@@ -200,7 +200,7 @@ class BillingService:
             return UsageInfo(
                 used_seconds=used_seconds,
                 free_tier_seconds=FREE_TIER_SECONDS,
-                remaining_seconds=float('inf'),
+                remaining_seconds=None,
                 usage_percentage=0,
                 is_exceeded=False,
                 is_warning=False,
