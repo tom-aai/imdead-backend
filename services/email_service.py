@@ -506,14 +506,14 @@ class EmailService:
         expert_email = expert_info["email"]
         expert_name = expert_info.get("name", "there")
         
-        subject = f"You're out of free credits. Users can no longer chat with your Expert Avatar"
+        subject = f"You're out of free credits. Users can no longer chat with your Expert Avatars."
         
         html_content = f"""
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #1a1a1a;">Hi {expert_name},</h2>
             
             <p style="color: #333; font-size: 16px; line-height: 1.6;">
-                Someone just tried to chat with your Expert Avatar, 
+                Someone just tried to chat with one of your Expert Avatars, 
                 but your free minutes for this month have been used up.
             </p>
             
