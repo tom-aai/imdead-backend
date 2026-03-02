@@ -29,6 +29,7 @@ configure_logging()
 logger = get_logger(__name__)
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB
 
 # API key for authenticating internal service calls (agent → backend)
 BACKEND_API_KEY = os.getenv("BACKEND_API_KEY")
