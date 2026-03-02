@@ -396,6 +396,32 @@ class TestCanStartSession:
             assert can_start is False
             assert 'upgrade required' in reason.lower()
 
+    def test_free_user_with_60_minutes_usage_cannot_start(self, mock_supabase):
+        """Test that free user with stt_audio_duration >= 3600 seconds (60 min) is blocked."""
+        service = BillingService(mock_supabase)
+        mock_supabase.table.return_value.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = [
+            {'usage': {'stt_audio_duration': 3600}},
+        ]
+        mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+            {'billing_status': 'free', 'is_admin': False, 'stripe_customer_id': None, 'stripe_subscription_id': None},
+        ]
+        can_start, reason = service.can_start_session('user-123')
+        assert can_start is False
+        assert 'upgrade' in reason.lower()
+
+    def test_free_user_with_over_60_minutes_usage_cannot_start(self, mock_supabase):
+        """Test that free user with stt_audio_duration > 3600 seconds is blocked."""
+        service = BillingService(mock_supabase)
+        mock_supabase.table.return_value.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = [
+            {'usage': {'stt_audio_duration': 3840}},
+        ]
+        mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+            {'billing_status': 'free', 'is_admin': False, 'stripe_customer_id': None, 'stripe_subscription_id': None},
+        ]
+        can_start, reason = service.can_start_session('user-123')
+        assert can_start is False
+        assert 'upgrade' in reason.lower()
+
 
 class TestCreateCheckoutSession:
     """Test create_checkout_session method."""

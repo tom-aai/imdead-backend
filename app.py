@@ -319,6 +319,23 @@ def chat_session_orchestrator_endpoint():
 		
 		logger.info(f"Message notification job enqueued for chat session {session_id} (job_id: {job_id})")
 		
+		# Report usage to Stripe for metered billing (don't fail endpoint if this fails)
+		try:
+			chat_row = supabase.table("chat_sessions").select("expert_user_id, usage").eq("session_id", session_id).limit(1).execute()
+			if chat_row.data and len(chat_row.data) > 0:
+				row = chat_row.data[0]
+				expert_user_id = row.get("expert_user_id")
+				usage = row.get("usage") or {}
+				stt_seconds = float(usage.get("stt_audio_duration") or 0)
+				if expert_user_id and stt_seconds > 0:
+					billing_service.report_usage_to_stripe(expert_user_id, stt_seconds)
+				else:
+					logger.debug(f"Chat session {session_id}: skip Stripe report (expert_user_id={bool(expert_user_id)}, stt_seconds={stt_seconds})")
+			else:
+				logger.warning(f"Chat session {session_id} not found for Stripe usage report")
+		except Exception as stripe_err:
+			logger.warning(f"Stripe usage report failed for session {session_id}: {stripe_err}", exc_info=True)
+		
 		return jsonify({
 			"status": "queued",
 			"message": "Message notification job enqueued",
