@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 # ============================================
 # CONFIGURATION - Set your image path here
 # ============================================
-IMAGE_PATH = "/Users/tom/repos/expertavatar/expertavatar-interview/expertavatar-interview-agent/assets/ashley_cartoon.png"
+IMAGE_PATH = "/Users/tom/repos/expertavatar/expertavatar-interview/expertavatar-interview-agent/assets/ashley-nb2.png"
 # ============================================
 
 

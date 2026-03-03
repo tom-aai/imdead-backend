@@ -272,9 +272,9 @@ class TestIntroductionEmail:
         assert result["email_id"] == "intro-email-789"
         
         call_args = mock_resend_send.call_args[0][0]
-        # Both users should be recipients
+        # Expert is the primary recipient, seeker is CC'd
         assert "expert@example.com" in call_args["to"]
-        assert "seeker@example.com" in call_args["to"]
+        assert "seeker@example.com" in call_args["cc"]
         # Both emails should be in reply-to
         assert len(call_args["reply_to"]) == 2
 
