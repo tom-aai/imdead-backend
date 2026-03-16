@@ -232,6 +232,65 @@ class TestGetCartoonId:
             generator._get_cartoon_id("user-456", "pic.jpg")
 
 
+class TestDownloadImageFromStorage:
+    """Test _download_image_from_storage method."""
+
+    def test_bare_filename_gets_user_id_prefix(
+        self, mock_supabase, create_test_image_bytes
+    ):
+        """Test that a bare picture_id (no '/') gets prefixed with user_id."""
+        image_bytes = create_test_image_bytes(format="PNG")
+        mock_supabase.storage.from_.return_value.download.return_value = image_bytes
+
+        generator = HedraAvatarGenerator(mock_supabase, hedra_api_key="test-key")
+        result = generator._download_image_from_storage(
+            "abc123.png", user_id="user-456"
+        )
+
+        mock_supabase.storage.from_.return_value.download.assert_called_once_with(
+            "user-456/abc123.png"
+        )
+        assert result is not None
+        if os.path.exists(result):
+            os.unlink(result)
+
+    def test_path_with_slash_used_directly(
+        self, mock_supabase, create_test_image_bytes
+    ):
+        """Test that a picture_id containing '/' is used as-is."""
+        image_bytes = create_test_image_bytes(format="PNG")
+        mock_supabase.storage.from_.return_value.download.return_value = image_bytes
+
+        generator = HedraAvatarGenerator(mock_supabase, hedra_api_key="test-key")
+        result = generator._download_image_from_storage(
+            "user-456/abc123_cartoon.png", user_id="user-456"
+        )
+
+        mock_supabase.storage.from_.return_value.download.assert_called_once_with(
+            "user-456/abc123_cartoon.png"
+        )
+        assert result is not None
+        if os.path.exists(result):
+            os.unlink(result)
+
+    def test_bare_filename_without_user_id_uses_as_is(
+        self, mock_supabase, create_test_image_bytes
+    ):
+        """Test that a bare filename without user_id falls back to using picture_id directly."""
+        image_bytes = create_test_image_bytes(format="PNG")
+        mock_supabase.storage.from_.return_value.download.return_value = image_bytes
+
+        generator = HedraAvatarGenerator(mock_supabase, hedra_api_key="test-key")
+        result = generator._download_image_from_storage("abc123.png")
+
+        mock_supabase.storage.from_.return_value.download.assert_called_once_with(
+            "abc123.png"
+        )
+        assert result is not None
+        if os.path.exists(result):
+            os.unlink(result)
+
+
 class TestUploadToHedra:
     """Test _upload_to_hedra method."""
 

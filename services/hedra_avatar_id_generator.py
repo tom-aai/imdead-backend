@@ -96,7 +96,9 @@ class HedraAvatarGenerator:
             hedra_photo_avatar_id = None
             local_original_path = None
             try:
-                local_original_path = self._download_image_from_storage(picture_id)
+                local_original_path = self._download_image_from_storage(
+                    picture_id, user_id
+                )
                 hedra_photo_avatar_id = self._upload_to_hedra(local_original_path)
                 logger.info(
                     f"Photorealistic Hedra asset created: {hedra_photo_avatar_id}"
@@ -200,12 +202,13 @@ class HedraAvatarGenerator:
             logger.error(f"Failed to get cartoon_id: {e}")
             raise
 
-    def _download_image_from_storage(self, picture_id: str) -> str:
+    def _download_image_from_storage(self, picture_id: str, user_id: str = None) -> str:
         """
         Download image from Supabase storage bucket.
 
         Args:
             picture_id: The picture filename/path in the storage bucket
+            user_id: The user's ID (used as path prefix when picture_id is a bare filename)
 
         Returns:
             str: Path to downloaded temporary file
@@ -214,15 +217,20 @@ class HedraAvatarGenerator:
             Exception: If download fails
         """
         try:
-            logger.debug(f"Downloading image {picture_id} from avatar-images-bucket")
+            if "/" in picture_id:
+                storage_path = picture_id
+            else:
+                storage_path = f"{user_id}/{picture_id}" if user_id else picture_id
+
+            logger.debug(f"Downloading image {storage_path} from avatar-images-bucket")
 
             # Download from Supabase storage
             response = self.supabase.storage.from_("avatar-images-bucket").download(
-                picture_id
+                storage_path
             )
 
             if not response:
-                raise Exception(f"Empty response downloading image {picture_id}")
+                raise Exception(f"Empty response downloading image {storage_path}")
 
             # Save to temporary file
             file_ext = Path(picture_id).suffix or ".jpg"
@@ -234,8 +242,8 @@ class HedraAvatarGenerator:
             return temp_file.name
 
         except Exception as e:
-            logger.error(f"Failed to download image '{picture_id}' from storage: {e}")
-            raise Exception(f"Image download failed for '{picture_id}': {e}")
+            logger.error(f"Failed to download image '{storage_path}' from storage: {e}")
+            raise Exception(f"Image download failed for '{storage_path}': {e}")
 
     def _upload_to_hedra(self, image_path: str) -> str:
         """
@@ -416,9 +424,13 @@ class HedraAvatarGenerator:
         # Only include session_id if this image came from the interview call flow
         if picture_source and picture_source == "from_interview_session":
             update_data["session_id"] = session_id
-            logger.debug("Image from interview call - will set session_id in user_avatar_images")
+            logger.debug(
+                "Image from interview call - will set session_id in user_avatar_images"
+            )
         else:
-            logger.debug("Image from user upload - will NOT set session_id in user_avatar_images")
+            logger.debug(
+                "Image from user upload - will NOT set session_id in user_avatar_images"
+            )
 
         # Update existing row (find by user_id and picture_id)
         response = (
