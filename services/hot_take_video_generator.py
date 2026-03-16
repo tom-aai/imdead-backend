@@ -24,7 +24,7 @@ from .logging_config import get_logger
 logger = get_logger(__name__)
 
 # Hedra Character-3 model ID
-CHARACTER_3_MODEL_ID = "d1dd37a3-e39a-4854-a298-6510289f9cf2"
+AI_MODEL_ID = "26f0fc66-152b-40ab-abed-76c43df99bc8" # old model: d1dd37a3-e39a-4854-a298-6510289f9cf2
 
 
 class HedraSession(requests.Session):
@@ -879,7 +879,7 @@ class HotTakeVideoGenerationService:
 
         generation_data = {
             "type": "video",
-            "ai_model_id": CHARACTER_3_MODEL_ID,
+            "ai_model_id": AI_MODEL_ID,
             "start_keyframe_id": image_asset_id,
             "audio_id": audio_asset_id,
             "generated_video_inputs": {

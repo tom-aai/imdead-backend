@@ -115,7 +115,7 @@ def main():
         result = service.generate_hot_take_video(
             session_id=session_id,
             text_prompt="professional interview conversation",
-            aspect_ratio="16:9",
+            aspect_ratio="9:16",
             resolution="720p",
             hot_take_number=hot_take_number,
             output_dir=output_dir,
