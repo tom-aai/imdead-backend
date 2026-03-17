@@ -90,7 +90,7 @@ class HotTakeVideoGenerationService:
         self,
         session_id: str,
         text_prompt: str = "professional interview conversation",
-        aspect_ratio: str = "9:16",
+        aspect_ratio: str = "16:9",
         resolution: str = "720p",
         output_dir: str = None,
         add_captions: bool = True,
@@ -208,20 +208,16 @@ class HotTakeVideoGenerationService:
             json.dump(word_timestamps, f, indent=2)
 
         # Step 7: Optionally add captions using CaptionGenerator
-        # Crop + caption are combined into a single ffmpeg pass to reduce peak memory
         if add_captions:
-            logger.info(
-                f"Adding captions to hot take video (with crop to {aspect_ratio})"
-            )
+            logger.info("Adding captions to hot take video")
 
             try:
-                # Use CaptionGenerator to crop + add captions in one ffmpeg pass
                 captioned_video_path = self.caption_generator.add_captions_to_video(
                     video_path=temp_video_path,
                     audio_path=audio_path,
                     timestamps_path=timestamps_path,
                     output_path=None,  # Will auto-generate output path
-                    crop_to_aspect_ratio=aspect_ratio,  # Combined crop+caption in one pass
+                    crop_to_aspect_ratio=None,
                 )
 
                 # Move the captioned video to the final output location
@@ -249,9 +245,10 @@ class HotTakeVideoGenerationService:
                 logger.error(f"Failed to add captions: {e}")
                 logger.warning(f"Falling back to video without captions (crop only)")
 
-                # Crop only (no captions) as fallback
                 video_path = os.path.join(output_dir, f"{base_filename}.mp4")
-                self._crop_video_to_9_16(temp_video_path, video_path)
+                import shutil
+
+                shutil.copy2(temp_video_path, video_path)
                 try:
                     os.unlink(temp_video_path)
                 except Exception as e2:
@@ -259,9 +256,10 @@ class HotTakeVideoGenerationService:
 
                 message = f"Hot take video generated (captions failed, video without captions)"
         else:
-            # Crop only (no captions)
             video_path = os.path.join(output_dir, f"{base_filename}.mp4")
-            self._crop_video_to_9_16(temp_video_path, video_path)
+            import shutil
+
+            shutil.copy2(temp_video_path, video_path)
             try:
                 os.unlink(temp_video_path)
             except Exception as e:
