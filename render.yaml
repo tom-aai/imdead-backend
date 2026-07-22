@@ -16,8 +16,6 @@ services:
         sync: false  # Set in Render dashboard
       - key: ANTHROPIC_API_KEY
         sync: false  # Set in Render dashboard
-      - key: HEDRA_API_KEY
-        sync: false  # Set in Render dashboard
       - key: CARTESIA_API_KEY
         sync: false  # Set in Render dashboard
       - key: GOOGLE_API_KEY
@@ -66,8 +64,8 @@ services:
         sync: false  # Set in Render dashboard
       - key: ANTHROPIC_API_KEY
         sync: false  # Set in Render dashboard
-      - key: HEDRA_API_KEY
-        sync: false  # Set in Render dashboard
+      - key: WAVESPEED_API_KEY
+        sync: false  # Set in Render dashboard - InfiniteTalk hot-take video generation
       - key: CARTESIA_API_KEY
         sync: false  # Set in Render dashboard
       - key: GOOGLE_API_KEY

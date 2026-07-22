@@ -5,7 +5,7 @@ This worker continuously polls the post_call_jobs table in Supabase,
 claims pending jobs, and processes them based on job_type:
 - 'post_call': Full post-call orchestration (transcript, profile, avatar, voice)
 - 'hot_take': Hot take video generation
-- 'avatar_update': Avatar update (cartoonize image + generate Hedra avatar)
+- 'avatar_update': Avatar update (cartoonize uploaded image)
 
 Run this as a separate service (e.g., Render Background Worker):
     python worker.py
@@ -178,7 +178,7 @@ class JobWorker:
                     session_id=session_id
                 )
             elif job_type == 'avatar_update':
-                # Avatar update (cartoonize + Hedra generation)
+                # Avatar update (cartoonize the uploaded image)
                 user_id = job_data.get('user_id')
                 picture_id = job_data.get('picture_id')
                 

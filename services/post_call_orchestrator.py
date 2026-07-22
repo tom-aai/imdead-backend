@@ -169,26 +169,8 @@ class PostCallOrchestrator:
                 max_retries=3
             )
             results["tasks"]["image_cartoonization"] = cartoonize_result
-            
-            # Task 4: Generate Hedra avatar from cartoonized image
-            # This DEPENDS on interview_call_analysis existing (needs to update it)
-            if transcript_succeeded:
-                hedra_avatar_result = await self._run_with_retry(
-                    task_name="hedra_avatar_generation",
-                    task_func=self._generate_hedra_avatar,
-                    session_id=session_id,
-                    max_retries=3,
-                    cartoonized_picture_id=cartoonize_result.get("result", {}).get("cartoonized_picture_id") if cartoonize_result.get("status") == "success" else None
-                )
-                results["tasks"]["hedra_avatar_generation"] = hedra_avatar_result
-            else:
-                logger.info(f"Skipping hedra_avatar_generation for session {session_id} - interview_call_analysis row does not exist")
-                results["tasks"]["hedra_avatar_generation"] = {
-                    "status": "skipped",
-                    "reason": "transcript_processing_failed"
-                }
-            
-            # Task 5: Process voice recording for cloning
+
+            # Task 4: Process voice recording for cloning
             # This doesn't depend on interview_call_analysis, so we can still do it
             voice_cloning_result = await self._run_with_retry(
                 task_name="voice_cloning",
@@ -461,8 +443,9 @@ class PostCallOrchestrator:
         Process an avatar update for an existing session.
         
         This is called when a user wants to change their avatar image.
-        It runs cartoonization and Hedra avatar generation.
-        
+        It cartoonizes the new image; the cartoon (and original photo) are what
+        the WaveSpeed hot-take pipeline and the Lemon Slice real-time avatar use.
+
         Args:
             session_id: The LiveKit session ID
             user_id: The user's ID
@@ -490,21 +473,10 @@ class PostCallOrchestrator:
                 max_retries=3
             )
             results["tasks"]["image_cartoonization"] = cartoonize_result
-            
+
             if cartoonize_result.get("status") != "success":
                 raise Exception(f"Cartoonization failed: {cartoonize_result.get('error')}")
-            
-            # Task 2: Generate Hedra avatar from cartoonized image
-            hedra_result = await self._run_with_retry(
-                task_name="hedra_avatar_generation",
-                task_func=self._generate_hedra_avatar_update,
-                user_id=user_id,
-                picture_id=picture_id,
-                session_id=session_id,
-                max_retries=3
-            )
-            results["tasks"]["hedra_avatar_generation"] = hedra_result
-            
+
             logger.info(f"Avatar update completed for session {session_id}")
             
         except Exception as e:

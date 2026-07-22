@@ -65,38 +65,24 @@ class TestProcessCallCompletion:
                 ):
                     with patch.object(
                         orchestrator,
-                        "_generate_hedra_avatar",
-                        return_value={
-                            "hedra_id": "123",
-                            "hedra_avatar_id": "hedra-123",
-                            "hedra_photo_avatar_id": "hedra-photo-456",
-                        },
+                        "_process_voice_recording",
+                        return_value={"voice_id": "voice-123"},
                     ):
-                        with patch.object(
-                            orchestrator,
-                            "_process_voice_recording",
-                            return_value={"voice_id": "voice-123"},
-                        ):
-                            result = await orchestrator.process_call_completion(
-                                "session-123"
-                            )
+                        result = await orchestrator.process_call_completion(
+                            "session-123"
+                        )
 
-                            assert result["status"] == "success"
-                            assert result["session_id"] == "session-123"
-                            assert len(result["tasks"]) == 5
-                            assert "transcript_processing" in result["tasks"]
-                            assert "profile_aggregation" in result["tasks"]
-                            assert "image_cartoonization" in result["tasks"]
-                            assert "hedra_avatar_generation" in result["tasks"]
-                            assert "voice_cloning" in result["tasks"]
-                            # Hedra generation now produces both cartoon and photorealistic asset IDs
-                            hedra_result = result["tasks"]["hedra_avatar_generation"][
-                                "result"
-                            ]
-                            assert (
-                                hedra_result.get("hedra_photo_avatar_id")
-                                == "hedra-photo-456"
-                            )
+                        assert result["status"] == "success"
+                        assert result["session_id"] == "session-123"
+                        # Hedra avatar generation was removed; the real-time avatar
+                        # (Lemon Slice) and hot-take video (WaveSpeed) use the cartoon
+                        # image directly, so no avatar-asset step runs here.
+                        assert len(result["tasks"]) == 4
+                        assert "transcript_processing" in result["tasks"]
+                        assert "profile_aggregation" in result["tasks"]
+                        assert "image_cartoonization" in result["tasks"]
+                        assert "hedra_avatar_generation" not in result["tasks"]
+                        assert "voice_cloning" in result["tasks"]
 
     @pytest.mark.asyncio
     async def test_orchestration_partial_failure(self, mock_supabase):
@@ -516,28 +502,24 @@ class TestProcessAvatarUpdate:
             google_api_key="google-key",
         )
 
-        # Mock the task methods
+        # Mock the task methods. Avatar update now only cartoonizes the image;
+        # there is no Hedra avatar-asset step anymore.
         with patch.object(
             orchestrator,
             "_cartoonize_avatar_update",
             return_value={"cartoonized_picture_id": "cartoon.png"},
         ):
-            with patch.object(
-                orchestrator,
-                "_generate_hedra_avatar_update",
-                return_value={"hedra_avatar_id": "hedra-123"},
-            ):
-                result = await orchestrator.process_avatar_update(
-                    session_id="session-123",
-                    user_id="user-456",
-                    picture_id="user-456/pic.png",
-                )
+            result = await orchestrator.process_avatar_update(
+                session_id="session-123",
+                user_id="user-456",
+                picture_id="user-456/pic.png",
+            )
 
-                assert result["status"] == "success"
-                assert result["session_id"] == "session-123"
-                assert len(result["tasks"]) == 2
-                assert "image_cartoonization" in result["tasks"]
-                assert "hedra_avatar_generation" in result["tasks"]
+            assert result["status"] == "success"
+            assert result["session_id"] == "session-123"
+            assert len(result["tasks"]) == 1
+            assert "image_cartoonization" in result["tasks"]
+            assert "hedra_avatar_generation" not in result["tasks"]
 
     @pytest.mark.asyncio
     async def test_avatar_update_cartoonization_failure(self, mock_supabase):
@@ -564,38 +546,6 @@ class TestProcessAvatarUpdate:
 
             assert result["status"] == "error"
             assert "Cartoonization" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_avatar_update_hedra_failure(self, mock_supabase):
-        """Test avatar update fails when Hedra generation fails."""
-        orchestrator = PostCallOrchestrator(
-            supabase_client=mock_supabase,
-            anthropic_api_key="test-key",
-            hedra_api_key="hedra-key",
-            cartesia_api_key="cartesia-key",
-            google_api_key="google-key",
-        )
-
-        # Mock cartoonization success, Hedra failure
-        with patch.object(
-            orchestrator,
-            "_cartoonize_avatar_update",
-            return_value={"cartoonized_picture_id": "cartoon.png"},
-        ):
-            with patch.object(
-                orchestrator,
-                "_generate_hedra_avatar_update",
-                side_effect=Exception("Hedra error"),
-            ):
-                result = await orchestrator.process_avatar_update(
-                    session_id="session-123",
-                    user_id="user-456",
-                    picture_id="user-456/pic.png",
-                )
-
-                # Hedra failure is caught in _run_with_retry so the task will show error
-                assert "hedra_avatar_generation" in result["tasks"]
-                assert result["tasks"]["hedra_avatar_generation"]["status"] == "error"
 
 
 class TestAvatarUpdateTaskMethods:
