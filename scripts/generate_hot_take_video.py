@@ -104,7 +104,7 @@ def main():
         tts_provider=tts_provider,
         cartesia_api_key=os.getenv("CARTESIA_API_KEY"),
         inworld_api_key=os.getenv("INWORLD_API_KEY"),
-        hedra_api_key=os.getenv("HEDRA_API_KEY")
+        wavespeed_api_key=os.getenv("WAVESPEED_API_KEY")
     )
     
     try:

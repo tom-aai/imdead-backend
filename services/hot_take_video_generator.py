@@ -3,11 +3,19 @@ Hot take video generation service.
 
 This service generates videos from hot takes:
 1. Generates audio from hot_take_x text using TTS (Inworld or Cartesia)
-2. Uses the Hedra avatar to create a video with the audio
+2. Animates the user's avatar image (cartoon or photorealistic) with that audio
+   using WaveSpeed's InfiniteTalk model to produce a talking-head video
 3. Optionally adds captions using the CaptionGenerator service
+
+The avatar image already exists in Supabase (`avatar-images-bucket`) as either
+the cartoonized image (`cartoon_id`) or the original photo (`picture_id`), chosen
+by the `use_hedra_photo_avatar` flag. InfiniteTalk takes an image URL + an audio
+URL, so we upload both to WaveSpeed's media store, run the model, and download
+the resulting video. This replaces the previous Hedra avatar pipeline.
 """
 
 import os
+import mimetypes
 import tempfile
 import time
 import json
@@ -23,21 +31,21 @@ from .logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Hedra Character-3 model ID
-AI_MODEL_ID = "26f0fc66-152b-40ab-abed-76c43df99bc8" # old model: d1dd37a3-e39a-4854-a298-6510289f9cf2
+# --- WaveSpeed InfiniteTalk configuration ---------------------------------
+# Unified REST API base. Submit a job to /{model}, then poll the result URL.
+WAVESPEED_API_BASE = "https://api.wavespeed.ai/api/v3"
+# Media upload endpoint: POST a binary file, get back a public download_url.
+WAVESPEED_UPLOAD_URL = f"{WAVESPEED_API_BASE}/media/upload/binary"
+# InfiniteTalk talking-head lip-sync model slug (env-overridable).
+WAVESPEED_VIDEO_MODEL = os.getenv("WAVESPEED_VIDEO_MODEL", "wavespeed-ai/infinitetalk")
 
+# InfiniteTalk can take minutes (a few seconds of clip -> tens of seconds of wall
+# time), so the overall poll budget is generous even though each request is quick.
+WAVESPEED_POLL_INTERVAL_S = 5
+WAVESPEED_TIMEOUT_S = 600
 
-class HedraSession(requests.Session):
-    """Custom session class that prepends the base URL to all requests"""
-
-    def __init__(self, api_key: str):
-        super().__init__()
-        self.base_url = "https://api.hedra.com/web-app/public"
-        self.headers["x-api-key"] = api_key
-
-    def request(self, method, url, *args, **kwargs):
-        full_url = f"{self.base_url}{url}"
-        return super().request(method, full_url, *args, **kwargs)
+# Bucket holding the avatar images (cartoon + original photo) fed to InfiniteTalk.
+AVATAR_IMAGES_BUCKET = "avatar-images-bucket"
 
 
 class HotTakeVideoGenerationService:
@@ -49,7 +57,7 @@ class HotTakeVideoGenerationService:
         tts_provider: str = "inworld",
         cartesia_api_key: str = None,
         inworld_api_key: str = None,
-        hedra_api_key: str = None,
+        wavespeed_api_key: str = None,
         output_dir: str = None,
     ):
         """
@@ -60,7 +68,7 @@ class HotTakeVideoGenerationService:
             tts_provider: TTS provider to use ("inworld" or "cartesia", default: "inworld")
             cartesia_api_key: Cartesia API key (optional, will use env var if not provided)
             inworld_api_key: Inworld API key (optional, will use env var if not provided)
-            hedra_api_key: Hedra API key (optional, will use env var if not provided)
+            wavespeed_api_key: WaveSpeed API key (optional, will use env var if not provided)
             output_dir: Directory to save generated videos (optional, defaults to temp dir)
         """
         self.supabase = supabase_client
@@ -77,11 +85,11 @@ class HotTakeVideoGenerationService:
         # Inworld setup
         self.inworld_api_key = inworld_api_key or os.getenv("INWORLD_API_KEY")
 
-        self.hedra_api_key = hedra_api_key or os.getenv("HEDRA_API_KEY")
+        self.wavespeed_api_key = wavespeed_api_key or os.getenv("WAVESPEED_API_KEY")
         self.output_dir = output_dir or tempfile.gettempdir()
 
-        if not self.hedra_api_key:
-            raise ValueError("HEDRA_API_KEY is required")
+        if not self.wavespeed_api_key:
+            raise ValueError("WAVESPEED_API_KEY is required")
 
         # Initialize CaptionGenerator for adding captions
         self.caption_generator = CaptionGenerator()
@@ -89,9 +97,9 @@ class HotTakeVideoGenerationService:
     def generate_hot_take_video(
         self,
         session_id: str,
-        text_prompt: str = "professional interview conversation",
+        text_prompt: str = "professional conversation",
         aspect_ratio: str = "16:9",
-        resolution: str = "720p",
+        resolution: str = "480p",
         output_dir: str = None,
         add_captions: bool = True,
     ) -> dict:
@@ -99,19 +107,20 @@ class HotTakeVideoGenerationService:
         Generate a video from a hot take and upload to Supabase storage.
 
         Process:
-        1. Get hot_take text and hedra_avatar_id from interview_call_analysis
+        1. Get hot_take text and avatar image path from interview_call_analysis
         2. Get user_id from interview_calls
         3. Get voice_id from user_profiles
         4. Generate audio from hot_take text using Cartesia (with word timestamps)
-        5. Generate video using Hedra avatar and audio
+        5. Generate video using WaveSpeed InfiniteTalk (avatar image + audio)
         6. Optionally add captions with word-by-word highlighting
         7. Upload video to Supabase storage and update database
 
         Args:
             session_id: The LiveKit session ID
-            text_prompt: Description for the video generation
-            aspect_ratio: Video aspect ratio ("16:9", "9:16", "1:1")
-            resolution: Video resolution ("540p", "720p")
+            text_prompt: Expression/pose guidance passed to InfiniteTalk
+            aspect_ratio: Retained for API compatibility; InfiniteTalk inherits the
+                aspect of the input avatar image, so this is not sent to the model
+            resolution: Video resolution ("480p" or "720p")
             output_dir: Directory to save outputs (defaults to current working directory)
             add_captions: Whether to add captions to the video (default: True)
 
@@ -130,17 +139,17 @@ class HotTakeVideoGenerationService:
 
         logger.info(f"Starting hot take video generation for session {session_id}")
 
-        # Step 1: Get hot_take and hedra_avatar_id from interview_call_analysis
-        hot_take_text, hedra_avatar_id = self._get_hot_take_data(session_id)
+        # Step 1: Get hot_take text and the avatar image path from interview_call_analysis
+        hot_take_text, image_storage_path = self._get_hot_take_data(session_id)
 
         if not hot_take_text:
             raise ValueError(f"No hot_take_1 found for session {session_id}")
 
-        if not hedra_avatar_id:
-            raise ValueError(f"No hedra_avatar_id found for session {session_id}")
+        if not image_storage_path:
+            raise ValueError(f"No avatar image found for session {session_id}")
 
         logger.debug(f"Hot take text preview: {hot_take_text[:100]}...")
-        logger.debug(f"Using Hedra avatar ID: {hedra_avatar_id}")
+        logger.debug(f"Using avatar image: {image_storage_path}")
 
         # Step 2: Get user_id from interview_calls
         user_id = self._get_user_id_from_session(session_id)
@@ -174,13 +183,12 @@ class HotTakeVideoGenerationService:
 
         logger.info(f"Audio generated for hot take using {self.tts_provider}")
 
-        # Step 5: Generate video using Hedra
-        temp_video_path = self._generate_video_with_hedra(
-            hedra_avatar_id=hedra_avatar_id,
+        # Step 5: Generate video using WaveSpeed InfiniteTalk
+        temp_video_path = self._generate_video_with_infinitetalk(
+            image_storage_path=image_storage_path,
             audio_path=temp_audio_path,
             session_id=session_id,
             text_prompt=text_prompt,
-            aspect_ratio=aspect_ratio,
             resolution=resolution,
         )
 
@@ -324,14 +332,18 @@ class HotTakeVideoGenerationService:
 
     def _get_hot_take_data(self, session_id: str) -> tuple[str, str]:
         """
-        Get hot_take and hedra_avatar_id from interview_call_analysis table.
-        Selects cartoon or photorealistic avatar based on use_hedra_photo_avatar flag.
+        Get the hot_take text and the avatar image path (in avatar-images-bucket)
+        to feed InfiniteTalk. Selects the photorealistic photo or the cartoon
+        based on the use_hedra_photo_avatar flag.
+
+        The cartoon image lives at `cartoon_id` (interview_call_analysis); the
+        original photo lives at `picture_id` (interview_calls) under `{user_id}/`.
 
         Args:
             session_id: The LiveKit session ID
 
         Returns:
-            tuple[str, str]: (hot_take_text, hedra_avatar_id)
+            tuple[str, str]: (hot_take_text, image_storage_path)
 
         Raises:
             ValueError: If session not found
@@ -339,9 +351,7 @@ class HotTakeVideoGenerationService:
         try:
             response = (
                 self.supabase.table("interview_call_analysis")
-                .select(
-                    "hot_take_1, hedra_avatar_id, hedra_photo_avatar_id, use_hedra_photo_avatar"
-                )
+                .select("hot_take_1, cartoon_id, use_hedra_photo_avatar")
                 .eq("session_id", session_id)
                 .limit(1)
                 .execute()
@@ -352,21 +362,57 @@ class HotTakeVideoGenerationService:
 
             analysis_data = response.data[0]
             hot_take_text = analysis_data.get("hot_take_1")
-
+            cartoon_id = analysis_data.get("cartoon_id")
             use_photo = analysis_data.get("use_hedra_photo_avatar", False)
-            photo_avatar_id = analysis_data.get("hedra_photo_avatar_id")
-            cartoon_avatar_id = analysis_data.get("hedra_avatar_id")
 
-            if use_photo and photo_avatar_id:
-                hedra_avatar_id = photo_avatar_id
+            # picture_id / user_id (original photo) live on interview_calls.
+            picture_id, user_id = self._get_picture_and_user(session_id)
+
+            if use_photo and picture_id:
+                image_storage_path = self._resolve_image_path(picture_id, user_id)
+            elif cartoon_id:
+                image_storage_path = self._resolve_image_path(cartoon_id, user_id)
+            elif picture_id:
+                # Fallback: no cartoon available, use the original photo.
+                image_storage_path = self._resolve_image_path(picture_id, user_id)
             else:
-                hedra_avatar_id = cartoon_avatar_id
+                image_storage_path = None
 
-            return hot_take_text, hedra_avatar_id
+            return hot_take_text, image_storage_path
 
         except Exception as e:
             logger.error(f"Failed to fetch hot take data for session {session_id}: {e}")
             raise
+
+    def _get_picture_and_user(self, session_id: str) -> tuple[str, str]:
+        """
+        Look up (picture_id, user_id) from interview_calls for a session.
+
+        Returns (None, None) if not found so the caller can fall back to the
+        cartoon image.
+        """
+        response = (
+            self.supabase.table("interview_calls")
+            .select("picture_id, user_id")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+        if not response.data or len(response.data) == 0:
+            return None, None
+        row = response.data[0]
+        return row.get("picture_id"), row.get("user_id")
+
+    @staticmethod
+    def _resolve_image_path(image_id: str, user_id: str = None) -> str:
+        """
+        Resolve a storage path in avatar-images-bucket. Bare filenames are
+        prefixed with `{user_id}/`; values that already contain a path are used
+        as-is (mirrors HedraAvatarGenerator._download_image_from_storage).
+        """
+        if "/" in image_id:
+            return image_id
+        return f"{user_id}/{image_id}" if user_id else image_id
 
     def _get_user_id_from_session(self, session_id: str) -> str:
         """
@@ -739,28 +785,30 @@ class HotTakeVideoGenerationService:
             )
             raise Exception(f"Audio generation failed: {e}")
 
-    def _generate_video_with_hedra(
+    def _generate_video_with_infinitetalk(
         self,
-        hedra_avatar_id: str,
+        image_storage_path: str,
         audio_path: str,
         session_id: str,
         text_prompt: str,
-        aspect_ratio: str,
         resolution: str,
     ) -> str:
         """
-        Generate video using Hedra avatar and audio.
+        Generate a talking-head video using WaveSpeed's InfiniteTalk model.
+
+        Downloads the avatar image from avatar-images-bucket, uploads the image
+        and the generated audio to WaveSpeed's media store, runs InfiniteTalk,
+        and downloads the resulting video.
 
         Args:
-            hedra_avatar_id: The Hedra avatar asset ID
-            audio_path: Path to the audio file
+            image_storage_path: Path of the avatar image in avatar-images-bucket
+            audio_path: Path to the local audio file
             session_id: Session ID for naming the output file
-            text_prompt: Description for the video generation
-            aspect_ratio: Video aspect ratio
-            resolution: Video resolution
+            text_prompt: Expression/pose guidance (optional, sent as `prompt`)
+            resolution: Video resolution ("480p" or "720p")
 
         Returns:
-            str: Path to the generated video file
+            str: Path to the downloaded video file
 
         Raises:
             Exception: If video generation fails
@@ -769,48 +817,52 @@ class HotTakeVideoGenerationService:
 
         try:
             logger.info(
-                "Hedra video generation started",
-                service="Hedra",
+                "InfiniteTalk video generation started",
+                service="WaveSpeed",
                 operation="generate_video",
-                avatar_id=hedra_avatar_id,
+                image_path=image_storage_path,
                 resolution=resolution,
             )
 
-            # Initialize Hedra session
-            session = HedraSession(api_key=self.hedra_api_key)
+            # Step 1: Download the avatar image from Supabase storage.
+            image_bytes = self.supabase.storage.from_(AVATAR_IMAGES_BUCKET).download(
+                image_storage_path
+            )
+            if not image_bytes:
+                raise Exception(
+                    f"Empty avatar image downloaded from {image_storage_path}"
+                )
 
-            # Step 1: Upload audio file
-            audio_id = self._upload_audio_file(session, audio_path)
+            # Step 2: Upload image + audio to WaveSpeed to get public URLs.
+            image_name = os.path.basename(image_storage_path) or "avatar.jpg"
+            image_mime = mimetypes.guess_type(image_name)[0] or "image/jpeg"
+            image_url = self._upload_to_wavespeed(image_bytes, image_name, image_mime)
 
-            # Step 2: Create video generation
-            generation_id = self._create_video_generation(
-                session=session,
-                image_asset_id=hedra_avatar_id,
-                audio_asset_id=audio_id,
+            with open(audio_path, "rb") as f:
+                audio_bytes = f.read()
+            audio_name = os.path.basename(audio_path)
+            audio_url = self._upload_to_wavespeed(audio_bytes, audio_name, "audio/wav")
+
+            # Step 3: Submit the InfiniteTalk job and poll for the result.
+            request_id, result_url = self._submit_infinitetalk(
+                image_url=image_url,
+                audio_url=audio_url,
                 text_prompt=text_prompt,
-                aspect_ratio=aspect_ratio,
                 resolution=resolution,
             )
+            video_url = self._poll_wavespeed(request_id, result_url)
 
-            # Step 3: Poll for completion
-            status_data = self._poll_generation_status(session, generation_id)
-
-            # Step 4: Download the video
-            if not status_data.get("download_url"):
-                raise Exception("No download URL found in the response")
-
-            # Download the raw video (cropping is deferred to caption/post-processing
-            # step so we can do crop+caption in a single ffmpeg pass, reducing peak memory)
+            # Step 4: Download the raw video (cropping is deferred to the caption /
+            # post-processing step so crop+caption happen in a single ffmpeg pass).
             output_path = os.path.join(
                 tempfile.gettempdir(), f"hot_take_video_{session_id}_raw.mp4"
             )
-
-            self._download_video(status_data["download_url"], output_path)
+            self._download_video(video_url, output_path)
 
             duration_ms = int((time.time() - video_start) * 1000)
             logger.info(
-                "Hedra video generation completed",
-                service="Hedra",
+                "InfiniteTalk video generation completed",
+                service="WaveSpeed",
                 operation="generate_video",
                 duration_ms=duration_ms,
                 status="success",
@@ -820,120 +872,161 @@ class HotTakeVideoGenerationService:
         except Exception as e:
             duration_ms = int((time.time() - video_start) * 1000)
             logger.error(
-                f"Hedra video generation failed: {e}",
-                service="Hedra",
+                f"InfiniteTalk video generation failed: {e}",
+                service="WaveSpeed",
                 operation="generate_video",
                 duration_ms=duration_ms,
                 error=str(e),
             )
             raise Exception(f"Video generation failed: {e}")
 
-    def _upload_audio_file(self, session: HedraSession, audio_path: str) -> str:
-        """Upload an audio file to Hedra and return the asset ID"""
-        logger.debug(f"Uploading audio file to Hedra: {audio_path}")
+    def _wavespeed_headers(self) -> dict:
+        """Authorization header shared by all WaveSpeed requests."""
+        return {"Authorization": f"Bearer {self.wavespeed_api_key}"}
 
-        # Create the audio asset
-        create_response = session.post(
-            "/assets", json={"name": os.path.basename(audio_path), "type": "audio"}
-        )
-
-        if not create_response.ok:
-            logger.error(
-                f"Error creating audio asset: {create_response.status_code} {create_response.text}"
-            )
-            raise Exception(f"Failed to create audio asset: {create_response.text}")
-
-        audio_id = create_response.json()["id"]
-        logger.debug(f"Created audio asset with ID: {audio_id}")
-
-        # Upload the audio file
-        with open(audio_path, "rb") as f:
-            upload_response = session.post(
-                f"/assets/{audio_id}/upload", files={"file": f}
-            )
-
-        if not upload_response.ok:
-            logger.error(
-                f"Error uploading audio file: {upload_response.status_code} {upload_response.text}"
-            )
-            raise Exception(f"Failed to upload audio file: {upload_response.text}")
-
-        logger.debug(f"Audio uploaded with ID: {audio_id}")
-        return audio_id
-
-    def _create_video_generation(
-        self,
-        session: HedraSession,
-        image_asset_id: str,
-        audio_asset_id: str,
-        text_prompt: str,
-        aspect_ratio: str,
-        resolution: str,
+    def _upload_to_wavespeed(
+        self, data: bytes, filename: str, content_type: str
     ) -> str:
-        """Create a video generation request and return the generation ID"""
-        logger.debug(
-            f"Creating video generation request (resolution: {resolution}, aspect_ratio: {aspect_ratio})"
+        """
+        Upload a binary file to WaveSpeed's media store and return its public URL.
+
+        Args:
+            data: File bytes
+            filename: Name to attach to the multipart upload
+            content_type: MIME type of the file
+
+        Returns:
+            str: The public download_url of the uploaded file
+
+        Raises:
+            Exception: If the upload fails
+        """
+        logger.debug(f"Uploading {filename} to WaveSpeed ({len(data)} bytes)")
+
+        response = requests.post(
+            WAVESPEED_UPLOAD_URL,
+            headers=self._wavespeed_headers(),  # no Content-Type for multipart
+            files={"file": (filename, data, content_type)},
+            timeout=120,
         )
-
-        generation_data = {
-            "type": "video",
-            "ai_model_id": AI_MODEL_ID,
-            "start_keyframe_id": image_asset_id,
-            "audio_id": audio_asset_id,
-            "generated_video_inputs": {
-                "text_prompt": text_prompt,
-                "resolution": resolution,
-                "aspect_ratio": aspect_ratio,
-            },
-        }
-
-        response = session.post("/generations", json=generation_data)
 
         if not response.ok:
-            logger.error(
-                f"Error creating generation: {response.status_code} {response.text}"
+            raise Exception(
+                f"WaveSpeed upload failed: {response.status_code} {response.text}"
             )
-            raise Exception(f"Failed to create generation: {response.text}")
 
-        result = response.json()
-        generation_id = result["id"]
-        logger.debug(f"Created generation with ID: {generation_id}")
+        download_url = ((response.json() or {}).get("data") or {}).get("download_url")
+        if not download_url:
+            raise Exception(f"No download_url in WaveSpeed upload response: {response.text}")
 
-        return generation_id
+        logger.debug(f"Uploaded {filename} -> {download_url}")
+        return download_url
 
-    def _poll_generation_status(
-        self, session: HedraSession, generation_id: str
-    ) -> dict:
-        """Poll the generation status until it completes or errors"""
-        logger.debug(f"Polling generation status: {generation_id}")
+    def _submit_infinitetalk(
+        self,
+        image_url: str,
+        audio_url: str,
+        text_prompt: str,
+        resolution: str,
+    ) -> tuple[str, str]:
+        """
+        Submit an InfiniteTalk job and return (request_id, result_url).
 
+        Aspect ratio is inherited from the input image, so it is not sent. The
+        prompt is optional and omitted when empty.
+
+        Raises:
+            Exception: If submission fails
+        """
+        submit_url = f"{WAVESPEED_API_BASE}/{WAVESPEED_VIDEO_MODEL}"
+
+        payload = {
+            "image": image_url,
+            "audio": audio_url,
+            "resolution": resolution,
+            "seed": -1,  # random
+        }
+        if text_prompt:
+            payload["prompt"] = text_prompt
+
+        logger.debug(
+            f"Submitting InfiniteTalk job (model: {WAVESPEED_VIDEO_MODEL}, resolution: {resolution})"
+        )
+
+        response = requests.post(
+            submit_url,
+            headers={**self._wavespeed_headers(), "Content-Type": "application/json"},
+            json=payload,
+            timeout=60,
+        )
+
+        if not response.ok:
+            raise Exception(
+                f"Failed to submit InfiniteTalk job: {response.status_code} {response.text}"
+            )
+
+        data = (response.json() or {}).get("data") or {}
+        request_id = data.get("id")
+        if not request_id:
+            raise Exception(f"No request id in InfiniteTalk submit response: {response.text}")
+
+        result_url = (data.get("urls") or {}).get("get")
+        logger.debug(f"InfiniteTalk job submitted with id: {request_id}")
+        return request_id, result_url
+
+    def _poll_wavespeed(self, request_id: str, result_url: str = None) -> str:
+        """
+        Poll a WaveSpeed prediction until it terminates and return the output URL.
+
+        Args:
+            request_id: The prediction/task id
+            result_url: Optional result URL from the submit response; falls back to
+                the conventional predictions endpoint if not provided
+
+        Returns:
+            str: URL of the generated video (first output)
+
+        Raises:
+            Exception: On a failed/cancelled/timeout status, or if the poll budget
+                is exceeded
+        """
+        result_url = result_url or f"{WAVESPEED_API_BASE}/predictions/{request_id}/result"
+        logger.debug(f"Polling WaveSpeed prediction: {request_id}")
+
+        deadline = time.time() + WAVESPEED_TIMEOUT_S
         poll_count = 0
         while True:
-            response = session.get(f"/generations/{generation_id}/status")
+            response = requests.get(result_url, headers=self._wavespeed_headers(), timeout=30)
 
             if not response.ok:
-                logger.error(
-                    f"Error getting generation status: {response.status_code} {response.text}"
+                raise Exception(
+                    f"Failed to get WaveSpeed result: {response.status_code} {response.text}"
                 )
-                raise Exception(f"Failed to get generation status: {response.text}")
 
-            status_data = response.json()
-            status = status_data["status"]
+            data = (response.json() or {}).get("data") or {}
+            status = data.get("status")
 
             poll_count += 1
-            if poll_count % 6 == 0:  # Log every 30 seconds (6 * 5s)
-                logger.debug(f"Generation status: {status}")
+            if poll_count % 6 == 0:  # Log every ~30 seconds (6 * 5s)
+                logger.debug(f"InfiniteTalk status: {status}")
 
-            if status == "complete":
-                logger.info("Video generation complete")
-                return status_data
-            elif status == "error":
-                error_message = status_data.get("error_message", "Unknown error")
-                logger.error(f"Hedra generation error: {error_message}")
-                raise Exception(f"Video generation failed: {error_message}")
+            if status == "completed":
+                outputs = data.get("outputs") or []
+                if not outputs:
+                    raise Exception(f"No outputs in completed InfiniteTalk result: {data!r}")
+                logger.info("InfiniteTalk generation complete")
+                return outputs[0]
+            elif status in ("failed", "cancelled", "timeout"):
+                error_message = data.get("error") or status
+                raise Exception(f"InfiniteTalk generation {status}: {error_message}")
 
-            # Still processing, wait and check again
-            time.sleep(5)
+            if time.time() >= deadline:
+                raise Exception(
+                    f"InfiniteTalk generation timed out after {WAVESPEED_TIMEOUT_S}s (last status: {status})"
+                )
+
+            # Still created/processing, wait and check again.
+            time.sleep(WAVESPEED_POLL_INTERVAL_S)
 
     def _upload_video_to_storage(
         self, video_path: str, user_id: str, session_id: str

@@ -44,6 +44,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # Use service key for worker
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 HEDRA_API_KEY = os.getenv("HEDRA_API_KEY")
+WAVESPEED_API_KEY = os.getenv("WAVESPEED_API_KEY")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 INWORLD_API_KEY = os.getenv("INWORLD_API_KEY")
@@ -103,7 +104,7 @@ class JobWorker:
                 tts_provider=VOICE_PROVIDER,
                 cartesia_api_key=CARTESIA_API_KEY,
                 inworld_api_key=INWORLD_API_KEY,
-                hedra_api_key=HEDRA_API_KEY
+                wavespeed_api_key=WAVESPEED_API_KEY
             )
         elif name == 'voice_cloning_service':
             from services.voice_cloner import VoiceCloningService
