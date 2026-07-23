@@ -596,6 +596,48 @@ class TestUpdateInterviewCalls:
             )
 
 
+class TestUpdateInterviewCallAnalysis:
+    """Test _update_interview_call_analysis method (best-effort mirror of cartoon_id)."""
+
+    def test_successful_update(self, mock_supabase):
+        """Writes cartoon_id to interview_call_analysis for the session."""
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value.data = [
+            {'session_id': 'session-123', 'cartoon_id': 'test-pic_cartoon.png'}
+        ]
+
+        generator = CartoonGenerator(mock_supabase, google_api_key="test-key")
+        generator._update_interview_call_analysis(
+            session_id='session-123',
+            cartoon_id='test-pic_cartoon.png'
+        )
+
+        mock_supabase.table.assert_called_with("interview_call_analysis")
+        update_call = mock_supabase.table.return_value.update
+        update_call.assert_called_once_with({"cartoon_id": "test-pic_cartoon.png"})
+
+    def test_no_matching_row_does_not_raise(self, mock_supabase):
+        """A missing analysis row is logged, not raised, so cartoonization still succeeds."""
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value.data = []
+
+        generator = CartoonGenerator(mock_supabase, google_api_key="test-key")
+        # Should not raise
+        generator._update_interview_call_analysis(
+            session_id='nonexistent-session',
+            cartoon_id='cartoon.png'
+        )
+
+    def test_database_error_does_not_raise(self, mock_supabase):
+        """A DB error is swallowed (best-effort) rather than failing the task."""
+        mock_supabase.table.return_value.update.side_effect = Exception("DB error")
+
+        generator = CartoonGenerator(mock_supabase, google_api_key="test-key")
+        # Should not raise
+        generator._update_interview_call_analysis(
+            session_id='session-123',
+            cartoon_id='cartoon.png'
+        )
+
+
 class TestEditorialPrompt:
     """Test that the editorial prompt is properly defined."""
     

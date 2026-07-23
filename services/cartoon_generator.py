@@ -61,7 +61,8 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
         3. Upload transformed image back to Supabase storage
         4. Update user_avatar_images.cartoon_id with cartoonized picture_id
         5. Update interview_calls.cartoon_id with cartoonized picture_id
-        6. Return new picture_id for use by Hedra
+        6. Update interview_call_analysis.cartoon_id (source of truth for readers)
+        7. Return new picture_id for use by Hedra
         
         Args:
             user_id: The user's ID
@@ -120,7 +121,16 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
                 session_id=session_id,
                 cartoon_id=new_picture_id
             )
-            
+
+            # Step 6: Mirror cartoon_id onto interview_call_analysis, which is the
+            # table the chat agent and the sessions API read the avatar image from.
+            # Best-effort: transcript_processing runs before this and creates the row,
+            # but if it's missing we don't want to fail an otherwise-successful cartoonization.
+            self._update_interview_call_analysis(
+                session_id=session_id,
+                cartoon_id=new_picture_id
+            )
+
             logger.info(f"Image cartoonization completed: {picture_id} -> {new_picture_id}")
             
             return {
@@ -395,3 +405,38 @@ Overall mood: credible, intelligent, approachable, and timeless — a visual rep
         except Exception as e:
             logger.error(f"Failed to update interview_calls: {e}")
             raise Exception(f"Database update failed: {e}")
+
+    def _update_interview_call_analysis(
+        self,
+        session_id: str,
+        cartoon_id: str
+    ) -> None:
+        """
+        Update interview_call_analysis.cartoon_id with the cartoonized picture ID.
+
+        This is the table the chat agent (services/session_data.py) and the frontend
+        sessions API read the avatar image from, so the value must land here for the
+        avatar to render. Written best-effort: the analysis row is created earlier by
+        transcript_processing, but a missing/failed row should not fail cartoonization.
+
+        Args:
+            session_id: The LiveKit session ID
+            cartoon_id: The cartoonized picture ID
+        """
+        try:
+            response = self.supabase.table("interview_call_analysis")\
+                .update({"cartoon_id": cartoon_id})\
+                .eq("session_id", session_id)\
+                .execute()
+
+            if response.data:
+                logger.debug(f"Updated interview_call_analysis.cartoon_id for session {session_id}")
+            else:
+                logger.warning(
+                    f"No interview_call_analysis row for session {session_id} to set cartoon_id "
+                    f"(transcript_processing may have failed); avatar will not render until it exists"
+                )
+
+        except Exception as e:
+            # Best-effort: log but don't fail the cartoonization task.
+            logger.error(f"Failed to update interview_call_analysis.cartoon_id for session {session_id}: {e}")
