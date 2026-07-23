@@ -390,9 +390,11 @@ class TestToggleAvatarTypeEndpoint(TestUpdateSessionEndpoint):
     def test_toggle_to_photo_success(
         self, client, mock_verify_user, mock_supabase_client
     ):
-        """Test setting use_hedra_photo_avatar to true when hedra_photo_avatar_id exists."""
+        """Test setting use_hedra_photo_avatar to true when the original photo (picture_id) exists."""
+        # Both the ownership (interview_call_analysis) and picture_id (interview_calls)
+        # lookups resolve to this row via the shared mock chain.
         mock_supabase_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
-            {"user_id": "user-123", "hedra_photo_avatar_id": "hedra-photo-456"}
+            {"user_id": "user-123", "picture_id": "user-123/photo.png"}
         ]
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute.return_value.data = [
             {"session_id": "session-123", "use_hedra_photo_avatar": True}
@@ -433,12 +435,12 @@ class TestToggleAvatarTypeEndpoint(TestUpdateSessionEndpoint):
         assert data["success"] is True
         assert data["use_hedra_photo_avatar"] is False
 
-    def test_cannot_use_photo_without_hedra_photo_avatar_id(
+    def test_cannot_use_photo_without_picture_id(
         self, client, mock_verify_user, mock_supabase_client
     ):
-        """Test that setting use_hedra_photo_avatar to true returns 400 when hedra_photo_avatar_id is null."""
+        """Test that setting use_hedra_photo_avatar to true returns 400 when no original photo (picture_id) exists."""
         mock_supabase_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
-            {"user_id": "user-123", "hedra_photo_avatar_id": None}
+            {"user_id": "user-123", "picture_id": None}
         ]
 
         response = client.patch(
@@ -452,7 +454,7 @@ class TestToggleAvatarTypeEndpoint(TestUpdateSessionEndpoint):
         data = json.loads(response.data)
         assert (
             "photorealistic" in data["error"].lower()
-            or "not available" in data["error"].lower()
+            or "no photo" in data["error"].lower()
         )
 
     def test_avatar_type_missing_use_hedra_photo_avatar(self, client, mock_verify_user):

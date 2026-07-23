@@ -1126,7 +1126,12 @@ def update_session_endpoint(session_id: str):
 @app.route("/sessions/<session_id>/avatar-type", methods=["PATCH"])
 def toggle_avatar_type_endpoint(session_id: str):
     """
-    Update whether the session uses the photorealistic (photo) or cartoon Hedra avatar.
+    Update whether the session uses the photorealistic (photo) or cartoon avatar.
+
+    The photorealistic avatar is the user's original uploaded photo (picture_id on
+    interview_calls); the cartoon is cartoon_id on interview_call_analysis. Both are
+    consumed directly by the Lemon Slice real-time avatar and the WaveSpeed hot-take
+    video, so availability of the photo depends only on picture_id existing.
 
     Authenticated via Supabase JWT token (user auth).
 
@@ -1159,10 +1164,10 @@ def toggle_avatar_type_endpoint(session_id: str):
         if not isinstance(use_hedra_photo_avatar, bool):
             return jsonify({"error": "use_hedra_photo_avatar must be a boolean"}), 400
 
-        # Verify session exists and belongs to this user; fetch hedra_photo_avatar_id for validation
+        # Verify session exists and belongs to this user
         session_response = (
             supabase.table("interview_call_analysis")
-            .select("user_id, hedra_photo_avatar_id")
+            .select("user_id")
             .eq("session_id", session_id)
             .limit(1)
             .execute()
@@ -1177,13 +1182,27 @@ def toggle_avatar_type_endpoint(session_id: str):
                 {"error": "Forbidden - session belongs to another user"}
             ), 403
 
-        # Cannot switch to photo mode if photorealistic asset was never generated
-        if use_hedra_photo_avatar and not session_row.get("hedra_photo_avatar_id"):
-            return jsonify(
-                {
-                    "error": "Cannot use photorealistic avatar - it is not available for this session"
-                }
-            ), 400
+        # The photorealistic avatar is the user's original uploaded photo. Only block
+        # the switch if no original photo (picture_id on interview_calls) exists.
+        if use_hedra_photo_avatar:
+            calls_response = (
+                supabase.table("interview_calls")
+                .select("picture_id")
+                .eq("session_id", session_id)
+                .limit(1)
+                .execute()
+            )
+            picture_id = (
+                calls_response.data[0].get("picture_id")
+                if calls_response.data
+                else None
+            )
+            if not picture_id:
+                return jsonify(
+                    {
+                        "error": "Cannot use photorealistic avatar - no photo is available for this session"
+                    }
+                ), 400
 
         update_response = (
             supabase.table("interview_call_analysis")
