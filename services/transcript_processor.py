@@ -103,11 +103,17 @@ class TranscriptProcessor:
 		Returns:
 			str: Formatted metadata string
 		"""
+		# Map the stored source_type onto a human label for the analyzer. A blog
+		# upload should be read as the user's own writing, not a spoken interview
+		# (see PLAN-blog-upload.md, D3 / the Source Type prompt instruction).
+		source_type = call_data.get('source_type') or 'voice'
+		source_label = 'blog post' if source_type == 'blog_upload' else 'voice'
 		return f"""Session ID: {call_data.get('session_id', 'N/A')}
 User ID: {call_data.get('user_id', 'N/A')}
 User First Name: {call_data.get('user_firstname', 'N/A')}
 User Last Name: {call_data.get('user_lastname', 'N/A')}
-Created At: {call_data.get('created_at', 'N/A')}"""
+Created At: {call_data.get('created_at', 'N/A')}
+Source Type: {source_label}"""
 	
 	def _format_transcript(self, conversation: dict) -> str:
 		"""

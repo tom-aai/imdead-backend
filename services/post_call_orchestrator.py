@@ -189,6 +189,87 @@ class PostCallOrchestrator:
         
         return results
     
+    async def process_blog_upload(self, session_id: str) -> Dict[str, Any]:
+        """
+        Orchestrate the lightweight processing for an uploaded blog post.
+
+        Unlike process_call_completion, a blog upload runs ONLY:
+        - Task 1: transcript analysis (_process_transcript) — the post's
+          expert-attributed [USER] turns are analyzed as the user's own words.
+        - Task 2: user profile aggregation (_aggregate_profile).
+
+        It explicitly SKIPS image cartoonization, Hedra avatar generation, and
+        voice cloning (see PLAN-blog-upload.md, D4): a blog has no photo and no
+        audio, and the expert already has an avatar and cloned voice from
+        onboarding.
+
+        Args:
+            session_id: The blog-upload session ID
+
+        Returns:
+            dict: Processing results with status and data
+        """
+        logger.info(f"Starting blog-upload orchestration for session {session_id}")
+
+        # Minimum-length guard (mirrors process_call_completion): skip an
+        # empty/degenerate post rather than analyzing it. A blog has no audio, so
+        # there is no speech check — only the transcript-length check applies.
+        try:
+            response = self.supabase.table("interview_calls").select("conversation").eq("session_id", session_id).execute()
+            if response.data:
+                conversation = response.data[0].get("conversation", {}) or {}
+                transcript = self.transcript_processor._format_transcript(conversation)
+                if len(transcript) < 50:
+                    logger.info(f"Skipping blog-upload processing for session {session_id} - transcript_too_short (transcript_length={len(transcript)})")
+                    return {"session_id": session_id, "status": "skipped", "reason": "transcript_too_short"}
+        except Exception as e:
+            logger.warning(f"Error checking blog-upload content for session {session_id}: {e}. Continuing with processing.")
+
+        results = {
+            "session_id": session_id,
+            "status": "success",
+            "tasks": {}
+        }
+
+        try:
+            # Task 1: Process transcript with retry
+            transcript_result = await self._run_with_retry(
+                task_name="transcript_processing",
+                task_func=self._process_transcript,
+                session_id=session_id,
+                max_retries=3
+            )
+            results["tasks"]["transcript_processing"] = transcript_result
+
+            transcript_succeeded = transcript_result.get("status") == "success"
+
+            # Task 2: Aggregate user profile data (depends on interview_call_analysis)
+            if transcript_succeeded:
+                profile_result = await self._run_with_retry(
+                    task_name="profile_aggregation",
+                    task_func=self._aggregate_profile,
+                    session_id=session_id,
+                    max_retries=3
+                )
+                results["tasks"]["profile_aggregation"] = profile_result
+            else:
+                logger.warning(f"Transcript processing failed for blog-upload session {session_id}. Skipping profile aggregation.")
+                results["tasks"]["profile_aggregation"] = {
+                    "status": "skipped",
+                    "reason": "transcript_processing_failed"
+                }
+
+            # Per D4: intentionally NO cartoonization, Hedra avatar generation, or
+            # voice cloning — a blog upload only touches transcript + profile.
+            logger.info(f"Blog-upload orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
+
+        except Exception as e:
+            logger.error(f"Blog-upload orchestration failed for session {session_id}: {e}")
+            results["status"] = "error"
+            results["error"] = str(e)
+
+        return results
+
     async def _run_with_retry(
         self,
         task_name: str,

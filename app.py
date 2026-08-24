@@ -12,6 +12,7 @@ from services.hedra_avatar_id_generator import HedraAvatarGenerator
 from services.voice_cloner import VoiceCloningService
 from services.billing_service import BillingService
 from services.email_service import EmailService
+from services.blog_normalizer import normalize_blog_post
 from services.logging_config import (
     configure_logging,
     get_logger,
@@ -34,6 +35,12 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB
 # API key for authenticating internal service calls (agent → backend)
 BACKEND_API_KEY = os.getenv("BACKEND_API_KEY")
 FLASK_ENV = os.getenv("FLASK_ENV", "production")
+
+# Length bounds for an uploaded blog post (see PLAN-blog-upload.md, D5). Below the
+# minimum there isn't enough material to analyze; above the maximum, cost/latency
+# of analysis is capped.
+BLOG_UPLOAD_MIN_CHARS = 200
+BLOG_UPLOAD_MAX_CHARS = 50000
 
 
 def require_api_key(f):
@@ -286,6 +293,127 @@ def resume_session_orchestrator_endpoint():
     except Exception as e:
         # Handle unexpected errors
         logger.error(f"Error enqueuing resume session job: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/blog-upload-orchestrator", methods=["POST"])
+@require_api_key
+def blog_upload_orchestrator_endpoint():
+    """
+    Turn an uploaded blog post into a queued blog-upload analysis job.
+
+    Unlike a voice call, a blog upload is a brand-new standalone session (see
+    PLAN-blog-upload.md, D1): each upload gets its own interview_calls row with a
+    fresh session_id and source_type='blog_upload'. The raw text is normalized
+    into the canonical expert-attributed conversation shape (D2/D3) and the row is
+    inserted; a 'blog_upload' job is then enqueued for the worker to analyze.
+
+    Authenticated via the internal API key (the Next.js route verifies the user's
+    Supabase JWT first and forwards the verified user_id here — see D7).
+
+    Required fields:
+    - user_id: The expert's user ID
+    - text: The raw blog-post text
+
+    Returns 202 with { status, session_id, job_id } on success, or 400 with a
+    clear message when user_id/text are missing or text is out of bounds.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        user_id = data.get("user_id")
+        text = data.get("text")
+
+        if not user_id:
+            return jsonify({"error": "user_id is required"}), 400
+
+        if not text or not isinstance(text, str) or not text.strip():
+            return jsonify({"error": "text is required"}), 400
+
+        # Enforce D5 length bounds on the trimmed text.
+        trimmed = text.strip()
+        if len(trimmed) < BLOG_UPLOAD_MIN_CHARS:
+            return jsonify(
+                {
+                    "error": f"Post is too short. Please provide at least {BLOG_UPLOAD_MIN_CHARS} characters."
+                }
+            ), 400
+
+        if len(trimmed) > BLOG_UPLOAD_MAX_CHARS:
+            return jsonify(
+                {
+                    "error": f"Post is too long. Please keep it under {BLOG_UPLOAD_MAX_CHARS:,} characters."
+                }
+            ), 400
+
+        # A blog upload is its own standalone session with a fresh session_id.
+        session_id = str(uuid.uuid4())
+
+        # Copy identity/metadata from the expert's most recent session so the
+        # analysis metadata and dashboard card render correctly. Uploads are only
+        # offered to experts who already have a profile (D6), so a prior row
+        # should exist; fall back to empty values if not.
+        latest = (
+            supabase.table("interview_calls")
+            .select("user_firstname, user_lastname, picture_id")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        prior = latest.data[0] if latest.data else {}
+
+        # Normalize the raw post into the canonical expert-attributed items.
+        conversation = normalize_blog_post(trimmed)
+
+        call_row = {
+            "session_id": session_id,
+            "user_id": user_id,
+            "user_firstname": prior.get("user_firstname"),
+            "user_lastname": prior.get("user_lastname"),
+            "picture_id": prior.get("picture_id"),
+            "source_type": "blog_upload",
+            "source_text": trimmed,
+            "conversation": conversation,
+        }
+
+        insert_response = (
+            supabase.table("interview_calls").insert(call_row).execute()
+        )
+
+        if not insert_response.data:
+            raise Exception("Failed to create interview_calls row for blog upload")
+
+        # Enqueue the lightweight blog_upload analysis job.
+        job_data = {
+            "session_id": session_id,
+            "job_type": "blog_upload",
+            "status": "pending",
+            "attempts": 0,
+            "max_attempts": 3,
+        }
+
+        job_response = supabase.table("post_call_jobs").insert(job_data).execute()
+
+        if not job_response.data:
+            raise Exception("Failed to enqueue blog upload job")
+
+        job_id = job_response.data[0].get("id")
+
+        logger.info(
+            f"Blog upload job enqueued for user {user_id}, session {session_id} (job_id: {job_id})"
+        )
+
+        return jsonify(
+            {
+                "status": "queued",
+                "message": "Blog upload job enqueued",
+                "session_id": session_id,
+                "job_id": job_id,
+            }
+        ), 202
+
+    except Exception as e:
+        logger.error(f"Error enqueuing blog upload job: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

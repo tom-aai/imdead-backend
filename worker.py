@@ -6,6 +6,7 @@ claims pending jobs, and processes them based on job_type:
 - 'post_call': Full post-call orchestration (transcript, profile, avatar, voice)
 - 'hot_take': Hot take video generation
 - 'avatar_update': Avatar update (cartoonize uploaded image)
+- 'blog_upload': Lightweight blog-post analysis (transcript + profile only)
 
 Run this as a separate service (e.g., Render Background Worker):
     python worker.py
@@ -227,6 +228,12 @@ class JobWorker:
                     original_session_id=original_session_id,
                     new_session_id=session_id
                 )
+            elif job_type == 'blog_upload':
+                # Blog upload - lightweight analysis (transcript + profile only).
+                # Skips cartoonization, Hedra avatar, and voice cloning (D4).
+                result = asyncio.run(self._get_service('orchestrator').process_blog_upload(
+                    session_id=session_id
+                ))
             elif job_type == 'message_notification':
                 # Send notification emails to experts about new messages
                 result = self._get_service('message_orchestrator').process_message_notifications()

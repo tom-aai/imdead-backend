@@ -84,6 +84,10 @@ Return your analysis in the following JSON structure:
 
 ## Instructions
 
+**Source Type:**
+- The metadata includes a "Source Type" field. When it is "blog post", the transcript is not a spoken interview but a piece the user wrote themselves. Treat it fully as the user's own words, views, and expertise — it is exactly as authoritative about them as anything they would say out loud.
+- CRITICAL for written posts: do NOT infer personality traits (e.g. "formal," "distant," "reserved," "guarded") merely because polished written prose reads differently from casual speech. The formality is an artifact of the medium, not the person. Judge personality from the substance, opinions, and style of what they say — never from the fact that it is written rather than spoken.
+
 **Avatar Personality Elements:**
 - For myers_briggs_code, carefully analyze the conversation to determine the most accurate type based on observable communication patterns and cognitive preferences
 - The personality description should be written in natural, everyday language (NOT Myers-Briggs terminology) and capture the essence of how the user presents themselves, communicates, and interacts
