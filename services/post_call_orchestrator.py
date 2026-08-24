@@ -191,17 +191,24 @@ class PostCallOrchestrator:
     
     async def process_blog_upload(self, session_id: str) -> Dict[str, Any]:
         """
-        Orchestrate the lightweight processing for an uploaded blog post.
+        Orchestrate the avatar-building processing for an uploaded blog post.
 
-        Unlike process_call_completion, a blog upload runs ONLY:
+        A blog upload runs:
         - Task 1: transcript analysis (_process_transcript) — the post's
           expert-attributed [USER] turns are analyzed as the user's own words.
         - Task 2: user profile aggregation (_aggregate_profile).
+        - Task 3: image cartoonization (_cartoonize_image) — turns the freshly
+          captured webcam picture into the cartoon the real-time (Lemon Slice)
+          chat avatar renders.
+        - After cartoonization succeeds: enqueue a separate `hot_take` job that
+          generates the promo video from hot_take_1 (from Task 1) + the new
+          cartoon.
 
-        It explicitly SKIPS image cartoonization, Hedra avatar generation, and
-        voice cloning (see PLAN-blog-upload.md, D4): a blog has no photo and no
-        audio, and the expert already has an avatar and cloned voice from
-        onboarding.
+        This mirrors a voice session's end result (see
+        PLAN-blog-upload-picture.md, D5/D6). There is NO Hedra step —
+        cartoonization is the whole avatar build, and Lemon Slice renders the
+        cartoon live at chat time. Voice cloning is also skipped: the expert
+        already has a cloned voice from onboarding, and a blog has no audio.
 
         Args:
             session_id: The blog-upload session ID
@@ -259,8 +266,33 @@ class PostCallOrchestrator:
                     "reason": "transcript_processing_failed"
                 }
 
-            # Per D4: intentionally NO cartoonization, Hedra avatar generation, or
-            # voice cloning — a blog upload only touches transcript + profile.
+            # Task 3: Cartoonize the captured webcam picture (per D5). This is
+            # the whole avatar build — the cartoon is what the real-time Lemon
+            # Slice avatar renders. The picture is mandatory for blog uploads
+            # (Phase 1), so no picture-less guard is needed. There is NO Hedra
+            # step and NO voice cloning.
+            cartoonize_result = await self._run_with_retry(
+                task_name="image_cartoonization",
+                task_func=self._cartoonize_image,
+                session_id=session_id,
+                max_retries=3
+            )
+            results["tasks"]["image_cartoonization"] = cartoonize_result
+
+            # After cartoonization succeeds, enqueue a separate `hot_take` job
+            # (per D6): the promo video needs both hot_take_1 (from Task 1) and
+            # the new cartoon_id. Reusing the standard `hot_take` worker branch
+            # gives us its retry and status polling. Do NOT run it inline, and
+            # skip the enqueue if cartoonization failed.
+            if cartoonize_result.get("status") == "success":
+                results["tasks"]["hot_take_enqueue"] = self._enqueue_hot_take_job(session_id)
+            else:
+                logger.warning(f"Cartoonization failed for blog-upload session {session_id}. Skipping hot-take video enqueue.")
+                results["tasks"]["hot_take_enqueue"] = {
+                    "status": "skipped",
+                    "reason": "cartoonization_failed"
+                }
+
             logger.info(f"Blog-upload orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
 
         except Exception as e:
@@ -410,6 +442,45 @@ class PostCallOrchestrator:
             session_id=session_id
         )
     
+    def _enqueue_hot_take_job(self, session_id: str) -> dict:
+        """
+        Enqueue a `hot_take` job so the existing worker branch generates the
+        promo video from hot_take_1 + the newly cartoonized image.
+
+        Mirrors the enqueue in app.py's /generate-hot-take-video endpoint: a
+        `post_call_jobs` row with job_type='hot_take', this session_id, and
+        job_data={"user_id": ...}. Runs the video generation asynchronously —
+        it is never executed inline here.
+
+        Args:
+            session_id: The blog-upload session ID
+
+        Returns:
+            dict: Enqueue result with status and (on success) the job_id
+        """
+        _, user_id = self._get_picture_and_user_from_session(session_id)
+
+        if not user_id:
+            raise ValueError(f"No user_id found for session {session_id}; cannot enqueue hot-take job")
+
+        job_record = {
+            "session_id": session_id,
+            "job_type": "hot_take",
+            "job_data": {"user_id": user_id},
+            "status": "pending",
+            "attempts": 0,
+            "max_attempts": 3,
+        }
+
+        response = self.supabase.table("post_call_jobs").insert(job_record).execute()
+
+        if not response.data:
+            raise Exception(f"Failed to enqueue hot-take job for session {session_id}")
+
+        job_id = response.data[0].get("id")
+        logger.info(f"Hot-take video job enqueued for blog-upload session {session_id} (job_id: {job_id})")
+        return {"status": "success", "job_id": job_id}
+
     def _get_picture_and_user_from_session(self, session_id: str) -> tuple[Optional[str], Optional[str]]:
         """
         Look up the picture_id and user_id associated with a session.

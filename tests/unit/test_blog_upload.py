@@ -104,12 +104,16 @@ class TestBlogUploadEndpoint:
                 {
                     "user_firstname": "Ada",
                     "user_lastname": "Lovelace",
-                    "picture_id": "user-1/pic.png",
                 }
             ]
             # insert chain
             interview_calls.insert.return_value.execute.return_value.data = [
                 {"session_id": "generated"}
+            ]
+
+            user_avatar_images = MagicMock()
+            user_avatar_images.insert.return_value.execute.return_value.data = [
+                {"id": "avatar-row-1"}
             ]
 
             post_call_jobs = MagicMock()
@@ -120,12 +124,15 @@ class TestBlogUploadEndpoint:
             def table_side_effect(name):
                 if name == "interview_calls":
                     return interview_calls
+                if name == "user_avatar_images":
+                    return user_avatar_images
                 if name == "post_call_jobs":
                     return post_call_jobs
                 return MagicMock()
 
             mock.table.side_effect = table_side_effect
             mock._interview_calls = interview_calls
+            mock._user_avatar_images = user_avatar_images
             mock._post_call_jobs = post_call_jobs
             yield mock
 
@@ -135,7 +142,13 @@ class TestBlogUploadEndpoint:
         text = "I have spent a decade building distributed systems. " * 10
         response = client.post(
             "/blog-upload-orchestrator",
-            data=json.dumps({"user_id": "user-1", "text": text}),
+            data=json.dumps(
+                {
+                    "user_id": "user-1",
+                    "text": text,
+                    "picture_id": "11111111-2222-3333-4444-555555555555",
+                }
+            ),
             headers=auth_headers,
         )
 
@@ -151,7 +164,12 @@ class TestBlogUploadEndpoint:
         assert call_row["source_text"] == text.strip()
         assert call_row["user_id"] == "user-1"
         assert call_row["user_firstname"] == "Ada"
-        assert call_row["picture_id"] == "user-1/pic.png"
+        # The captured picture is stored, normalized to the "{uuid}.png"
+        # onboarding convention — not copied from a prior session.
+        assert (
+            call_row["picture_id"]
+            == "11111111-2222-3333-4444-555555555555.png"
+        )
         # Conversation is expert-attributed items.
         assert call_row["conversation"]["items"]
         assert all(
@@ -160,11 +178,44 @@ class TestBlogUploadEndpoint:
         # session_id on the row matches the returned session_id.
         assert call_row["session_id"] == body["session_id"]
 
+        # A user_avatar_images row was seeded for the captured picture so the
+        # later cartoonize UPDATE finds a row (D7).
+        avatar_row = mock_supabase._user_avatar_images.insert.call_args[0][0]
+        assert avatar_row["user_id"] == "user-1"
+        assert avatar_row["picture_id"] == "11111111-2222-3333-4444-555555555555.png"
+        assert avatar_row["picture_source"] == "blog_upload"
+
         # A blog_upload job was enqueued for the same session.
         job_row = mock_supabase._post_call_jobs.insert.call_args[0][0]
         assert job_row["job_type"] == "blog_upload"
         assert job_row["session_id"] == body["session_id"]
         assert job_row["status"] == "pending"
+
+    def test_picture_id_with_extension_is_preserved(
+        self, client, auth_headers, mock_api_key, mock_supabase
+    ):
+        """A picture_id that already has an extension is stored as-is."""
+        text = "I have spent a decade building distributed systems. " * 10
+        client.post(
+            "/blog-upload-orchestrator",
+            data=json.dumps(
+                {"user_id": "user-1", "text": text, "picture_id": "pic-9.png"}
+            ),
+            headers=auth_headers,
+        )
+        call_row = mock_supabase._interview_calls.insert.call_args[0][0]
+        assert call_row["picture_id"] == "pic-9.png"
+
+    def test_missing_picture_id_returns_400(
+        self, client, auth_headers, mock_api_key, mock_supabase
+    ):
+        response = client.post(
+            "/blog-upload-orchestrator",
+            data=json.dumps({"user_id": "user-1", "text": "x" * 300}),
+            headers=auth_headers,
+        )
+        assert response.status_code == 400
+        assert "picture_id" in json.loads(response.data)["error"]
 
     def test_missing_user_id_returns_400(
         self, client, auth_headers, mock_api_key, mock_supabase
@@ -193,7 +244,9 @@ class TestBlogUploadEndpoint:
     ):
         response = client.post(
             "/blog-upload-orchestrator",
-            data=json.dumps({"user_id": "user-1", "text": "too short"}),
+            data=json.dumps(
+                {"user_id": "user-1", "text": "too short", "picture_id": "pic-1"}
+            ),
             headers=auth_headers,
         )
         assert response.status_code == 400
@@ -204,7 +257,9 @@ class TestBlogUploadEndpoint:
     ):
         response = client.post(
             "/blog-upload-orchestrator",
-            data=json.dumps({"user_id": "user-1", "text": "x" * 50001}),
+            data=json.dumps(
+                {"user_id": "user-1", "text": "x" * 50001, "picture_id": "pic-1"}
+            ),
             headers=auth_headers,
         )
         assert response.status_code == 400
@@ -236,9 +291,10 @@ class TestProcessBlogUpload:
         )
 
     @pytest.mark.asyncio
-    async def test_runs_transcript_and_profile_only(self, mock_supabase):
+    async def test_builds_avatar_and_enqueues_hot_take(self, mock_supabase):
         """A blog_upload job runs transcript analysis + profile aggregation,
-        and never touches cartoonization, Hedra, or voice cloning (D4)."""
+        cartoonizes the captured picture, and enqueues a hot_take job — with
+        no Hedra or voice-cloning work attempted (D5/D6)."""
         conversation = {
             "items": [
                 {
@@ -256,8 +312,10 @@ class TestProcessBlogUpload:
         ) as mock_transcript, patch.object(
             orchestrator, "_aggregate_profile", return_value={"status": "success"}
         ) as mock_profile, patch.object(
-            orchestrator, "_cartoonize_image"
+            orchestrator, "_cartoonize_image", return_value={"cartoon_id": "cartoon.png"}
         ) as mock_cartoon, patch.object(
+            orchestrator, "_enqueue_hot_take_job", return_value={"status": "success", "job_id": "job-1"}
+        ) as mock_hot_take, patch.object(
             orchestrator, "_generate_hedra_avatar"
         ) as mock_hedra, patch.object(
             orchestrator, "_process_voice_recording"
@@ -267,24 +325,58 @@ class TestProcessBlogUpload:
         assert result["status"] == "success"
         assert result["session_id"] == "blog-session-1"
 
-        # Task 1 and Task 2 ran and succeeded.
+        # Transcript + profile ran and succeeded.
         mock_transcript.assert_called_once_with(session_id="blog-session-1")
         mock_profile.assert_called_once_with(session_id="blog-session-1")
         assert result["tasks"]["transcript_processing"]["status"] == "success"
         assert result["tasks"]["profile_aggregation"]["status"] == "success"
 
-        # Only those two tasks ran — nothing image/voice related.
-        assert set(result["tasks"].keys()) == {
-            "transcript_processing",
-            "profile_aggregation",
-        }
-        mock_cartoon.assert_not_called()
+        # The captured picture was cartoonized (the avatar build).
+        mock_cartoon.assert_called_once_with(session_id="blog-session-1")
+        assert result["tasks"]["image_cartoonization"]["status"] == "success"
+
+        # A hot_take job was enqueued after cartoonization succeeded.
+        mock_hot_take.assert_called_once_with("blog-session-1")
+        assert result["tasks"]["hot_take_enqueue"]["status"] == "success"
+
+        # No Hedra avatar-asset step and no voice cloning.
         mock_hedra.assert_not_called()
         mock_voice.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_skips_hot_take_when_cartoonization_fails(self, mock_supabase):
+        """If cartoonization fails, the hot_take job is not enqueued (D6)."""
+        conversation = {
+            "items": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"text": "A genuinely long enough post about my area of deep expertise here."}
+                    ],
+                }
+            ]
+        }
+        orchestrator = self._make_orchestrator(mock_supabase, conversation)
+
+        with patch.object(
+            orchestrator, "_process_transcript", return_value={"status": "success"}
+        ), patch.object(
+            orchestrator, "_aggregate_profile", return_value={"status": "success"}
+        ), patch.object(
+            orchestrator, "_cartoonize_image", side_effect=Exception("cartoon boom")
+        ), patch.object(
+            orchestrator, "_enqueue_hot_take_job"
+        ) as mock_hot_take:
+            result = await orchestrator.process_blog_upload("blog-session-4")
+
+        assert result["tasks"]["image_cartoonization"]["status"] == "error"
+        assert result["tasks"]["hot_take_enqueue"]["status"] == "skipped"
+        mock_hot_take.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_skips_profile_when_transcript_fails(self, mock_supabase):
-        """If transcript analysis fails, profile aggregation is skipped (not run)."""
+        """If transcript analysis fails, profile aggregation is skipped (not run).
+        Cartoonization does not depend on the transcript, so it still runs."""
         conversation = {
             "items": [
                 {
@@ -301,12 +393,46 @@ class TestProcessBlogUpload:
             orchestrator,
             "_process_transcript",
             side_effect=Exception("LLM boom"),
-        ), patch.object(orchestrator, "_aggregate_profile") as mock_profile:
+        ), patch.object(orchestrator, "_aggregate_profile") as mock_profile, patch.object(
+            orchestrator, "_cartoonize_image", return_value={"cartoon_id": "cartoon.png"}
+        ), patch.object(
+            orchestrator, "_enqueue_hot_take_job", return_value={"status": "success", "job_id": "job-1"}
+        ):
             result = await orchestrator.process_blog_upload("blog-session-2")
 
         assert result["tasks"]["transcript_processing"]["status"] == "error"
         assert result["tasks"]["profile_aggregation"]["status"] == "skipped"
         mock_profile.assert_not_called()
+
+    def test_enqueue_hot_take_job_inserts_expected_record(self, mock_supabase):
+        """_enqueue_hot_take_job inserts a hot_take post_call_jobs row mirroring
+        the /generate-hot-take-video endpoint."""
+        orchestrator = PostCallOrchestrator(
+            supabase_client=mock_supabase,
+            anthropic_api_key="test-key",
+            hedra_api_key="hedra-key",
+            cartesia_api_key="cartesia-key",
+            google_api_key="google-key",
+        )
+
+        mock_supabase.table.return_value.insert.return_value.execute.return_value.data = [
+            {"id": "hot-take-job-1"}
+        ]
+
+        with patch.object(
+            orchestrator,
+            "_get_picture_and_user_from_session",
+            return_value=("pic.png", "user-9"),
+        ):
+            result = orchestrator._enqueue_hot_take_job("blog-session-1")
+
+        assert result == {"status": "success", "job_id": "hot-take-job-1"}
+        mock_supabase.table.assert_called_with("post_call_jobs")
+        job_record = mock_supabase.table.return_value.insert.call_args[0][0]
+        assert job_record["session_id"] == "blog-session-1"
+        assert job_record["job_type"] == "hot_take"
+        assert job_record["job_data"] == {"user_id": "user-9"}
+        assert job_record["status"] == "pending"
 
     @pytest.mark.asyncio
     async def test_degenerate_post_is_skipped(self, mock_supabase):

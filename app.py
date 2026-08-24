@@ -314,20 +314,39 @@ def blog_upload_orchestrator_endpoint():
     Required fields:
     - user_id: The expert's user ID
     - text: The raw blog-post text
+    - picture_id: The freshly captured webcam picture (uploaded client-side to
+      avatar-images-bucket). Mandatory — every blog upload builds an avatar from a
+      new picture, so there is no reuse/skip path (see PLAN-blog-upload-picture.md
+      D3). The bare UUID from the browser is normalized to "{picture_id}.png" to
+      match the onboarding storage convention (D4), stored on the session, and
+      seeded into user_avatar_images so cartoonization can later UPDATE it (D7).
 
     Returns 202 with { status, session_id, job_id } on success, or 400 with a
-    clear message when user_id/text are missing or text is out of bounds.
+    clear message when user_id/text/picture_id are missing or text is out of bounds.
     """
     try:
         data = request.get_json(silent=True) or {}
         user_id = data.get("user_id")
         text = data.get("text")
+        picture_id = data.get("picture_id")
 
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
 
         if not text or not isinstance(text, str) or not text.strip():
             return jsonify({"error": "text is required"}), 400
+
+        # The picture is mandatory: every blog upload captures a fresh webcam
+        # picture that becomes the avatar (D3). No fallback to an old photo.
+        if not picture_id or not isinstance(picture_id, str) or not picture_id.strip():
+            return jsonify({"error": "picture_id is required"}), 400
+
+        # Normalize to the onboarding storage convention (D4): the browser hands
+        # over a bare UUID; the stored value is "{uuid}.png" (no user_id prefix),
+        # and readers prepend "{user_id}/" when the value has no slash.
+        picture_id = picture_id.strip()
+        if not os.path.splitext(picture_id)[1]:
+            picture_id = f"{picture_id}.png"
 
         # Enforce D5 length bounds on the trimmed text.
         trimmed = text.strip()
@@ -351,10 +370,11 @@ def blog_upload_orchestrator_endpoint():
         # Copy identity/metadata from the expert's most recent session so the
         # analysis metadata and dashboard card render correctly. Uploads are only
         # offered to experts who already have a profile (D6), so a prior row
-        # should exist; fall back to empty values if not.
+        # should exist; fall back to empty values if not. The picture is NOT
+        # copied — this upload has its own freshly captured picture (D3).
         latest = (
             supabase.table("interview_calls")
-            .select("user_firstname, user_lastname, picture_id")
+            .select("user_firstname, user_lastname")
             .eq("user_id", user_id)
             .order("created_at", desc=True)
             .limit(1)
@@ -370,7 +390,7 @@ def blog_upload_orchestrator_endpoint():
             "user_id": user_id,
             "user_firstname": prior.get("user_firstname"),
             "user_lastname": prior.get("user_lastname"),
-            "picture_id": prior.get("picture_id"),
+            "picture_id": picture_id,
             "source_type": "blog_upload",
             "source_text": trimmed,
             "conversation": conversation,
@@ -382,6 +402,24 @@ def blog_upload_orchestrator_endpoint():
 
         if not insert_response.data:
             raise Exception("Failed to create interview_calls row for blog upload")
+
+        # Seed the user_avatar_images row for the captured picture. Cartoonization
+        # UPDATEs this row keyed on (user_id, picture_id) and raises if it's
+        # missing; the blog flow has no interview agent to insert it, so the
+        # endpoint does it here (D7, mirroring the image-upload endpoint).
+        avatar_image_row = {
+            "user_id": user_id,
+            "picture_id": picture_id,
+            "picture_source": "blog_upload",
+        }
+        avatar_image_response = (
+            supabase.table("user_avatar_images").insert(avatar_image_row).execute()
+        )
+
+        if not avatar_image_response.data:
+            raise Exception(
+                "Failed to create user_avatar_images row for blog upload"
+            )
 
         # Enqueue the lightweight blog_upload analysis job.
         job_data = {
