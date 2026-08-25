@@ -200,12 +200,15 @@ class PostCallOrchestrator:
         - Task 3: image cartoonization (_cartoonize_image) — turns the freshly
           captured webcam picture into the cartoon the real-time (Lemon Slice)
           chat avatar renders.
-        - After cartoonization succeeds: enqueue a separate `hot_take` job that
-          generates the promo video from hot_take_1 (from Task 1) + the new
-          cartoon.
+
+        The hot-take VIDEO is intentionally NOT generated here. Task 1 still
+        produces the hot_take_1 TEXT, which pre-populates the editable hot-take
+        field on the dashboard; the expert reviews/edits that text and triggers
+        video generation themselves via the existing /generate-hot-take-video
+        flow. Auto-generating the video from an unreviewed post is not wanted.
 
         This mirrors a voice session's end result (see
-        PLAN-blog-upload-picture.md, D5/D6). There is NO Hedra step —
+        PLAN-blog-upload-picture.md, D5). There is NO Hedra step —
         cartoonization is the whole avatar build, and Lemon Slice renders the
         cartoon live at chat time. Voice cloning is also skipped: the expert
         already has a cloned voice from onboarding, and a blog has no audio.
@@ -279,19 +282,12 @@ class PostCallOrchestrator:
             )
             results["tasks"]["image_cartoonization"] = cartoonize_result
 
-            # After cartoonization succeeds, enqueue a separate `hot_take` job
-            # (per D6): the promo video needs both hot_take_1 (from Task 1) and
-            # the new cartoon_id. Reusing the standard `hot_take` worker branch
-            # gives us its retry and status polling. Do NOT run it inline, and
-            # skip the enqueue if cartoonization failed.
-            if cartoonize_result.get("status") == "success":
-                results["tasks"]["hot_take_enqueue"] = self._enqueue_hot_take_job(session_id)
-            else:
-                logger.warning(f"Cartoonization failed for blog-upload session {session_id}. Skipping hot-take video enqueue.")
-                results["tasks"]["hot_take_enqueue"] = {
-                    "status": "skipped",
-                    "reason": "cartoonization_failed"
-                }
+            # The hot-take VIDEO is deliberately NOT enqueued here. Task 1 has
+            # already written the hot_take_1 TEXT, which pre-populates the
+            # editable hot-take field on the dashboard. The expert reviews/edits
+            # that text and generates the video themselves (via the existing
+            # /generate-hot-take-video flow) — we don't auto-generate a video
+            # from an unreviewed post.
 
             logger.info(f"Blog-upload orchestration completed for session {session_id} ({len(results['tasks'])} tasks)")
 

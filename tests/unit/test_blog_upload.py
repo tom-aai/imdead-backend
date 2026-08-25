@@ -27,6 +27,7 @@ class TestNormalizeBlogPost:
         assert result == {
             "items": [
                 {
+                    "type": "message",
                     "role": "user",
                     "content": [{"text": "This is a short post about my expertise."}],
                 }
@@ -66,6 +67,16 @@ class TestNormalizeBlogPost:
         assert isinstance(content, list)
         assert isinstance(content[0], dict)
         assert "text" in content[0]
+
+    def test_every_item_is_typed_message(self):
+        """Each item must carry type='message' so the chat agent's knowledge
+        base (interview_call_analysis.transcript) keeps it —
+        TranscriptProcessor._filter_conversation_items drops non-message items."""
+        long_text = "\n\n".join(f"Paragraph {i}. " + ("word " * 100) for i in range(8))
+        for text in ("A short post that is long enough to analyze." * 3, long_text):
+            result = normalize_blog_post(text)
+            assert result["items"]
+            assert all(item["type"] == "message" for item in result["items"])
 
 
 class TestBlogUploadEndpoint:
@@ -291,13 +302,15 @@ class TestProcessBlogUpload:
         )
 
     @pytest.mark.asyncio
-    async def test_builds_avatar_and_enqueues_hot_take(self, mock_supabase):
-        """A blog_upload job runs transcript analysis + profile aggregation,
-        cartoonizes the captured picture, and enqueues a hot_take job — with
-        no Hedra or voice-cloning work attempted (D5/D6)."""
+    async def test_builds_avatar_without_generating_hot_take_video(self, mock_supabase):
+        """A blog_upload job runs transcript analysis + profile aggregation and
+        cartoonizes the captured picture, but does NOT auto-enqueue a hot_take
+        video job — the expert reviews/edits the hot_take_1 text and triggers
+        the video themselves. No Hedra or voice-cloning work is attempted."""
         conversation = {
             "items": [
                 {
+                    "type": "message",
                     "role": "user",
                     "content": [
                         {"text": "I have spent a decade building distributed systems and this is what I learned."}
@@ -335,43 +348,13 @@ class TestProcessBlogUpload:
         mock_cartoon.assert_called_once_with(session_id="blog-session-1")
         assert result["tasks"]["image_cartoonization"]["status"] == "success"
 
-        # A hot_take job was enqueued after cartoonization succeeded.
-        mock_hot_take.assert_called_once_with("blog-session-1")
-        assert result["tasks"]["hot_take_enqueue"]["status"] == "success"
+        # The hot-take VIDEO is not auto-generated: no job enqueued, no such task.
+        mock_hot_take.assert_not_called()
+        assert "hot_take_enqueue" not in result["tasks"]
 
         # No Hedra avatar-asset step and no voice cloning.
         mock_hedra.assert_not_called()
         mock_voice.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_skips_hot_take_when_cartoonization_fails(self, mock_supabase):
-        """If cartoonization fails, the hot_take job is not enqueued (D6)."""
-        conversation = {
-            "items": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"text": "A genuinely long enough post about my area of deep expertise here."}
-                    ],
-                }
-            ]
-        }
-        orchestrator = self._make_orchestrator(mock_supabase, conversation)
-
-        with patch.object(
-            orchestrator, "_process_transcript", return_value={"status": "success"}
-        ), patch.object(
-            orchestrator, "_aggregate_profile", return_value={"status": "success"}
-        ), patch.object(
-            orchestrator, "_cartoonize_image", side_effect=Exception("cartoon boom")
-        ), patch.object(
-            orchestrator, "_enqueue_hot_take_job"
-        ) as mock_hot_take:
-            result = await orchestrator.process_blog_upload("blog-session-4")
-
-        assert result["tasks"]["image_cartoonization"]["status"] == "error"
-        assert result["tasks"]["hot_take_enqueue"]["status"] == "skipped"
-        mock_hot_take.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_skips_profile_when_transcript_fails(self, mock_supabase):

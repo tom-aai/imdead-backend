@@ -83,8 +83,13 @@ def normalize_blog_post(text: str) -> dict:
         # No blank-line structure to chunk on — keep the whole post as one turn.
         chunks = _chunk_paragraphs(paragraphs) if paragraphs else [cleaned]
 
+    # Each item carries type="message" to match the canonical voice-call shape.
+    # TranscriptProcessor._filter_conversation_items skips any item whose type is
+    # not "message" when building the chat agent's knowledge base (the
+    # interview_call_analysis.transcript column). Without this the blog turns are
+    # filtered out and the avatar has no knowledge of the post.
     items = [
-        {"role": "user", "content": [{"text": chunk}]}
+        {"type": "message", "role": "user", "content": [{"text": chunk}]}
         for chunk in chunks
     ]
 
