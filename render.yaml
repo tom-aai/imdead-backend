@@ -1,119 +1,41 @@
+# Render Blueprint for the "I'm Dead" backend.
+#
+# Deploy: push this repo to GitHub/GitLab, then in Render pick "New +" ->
+# "Blueprint" and point it at the repo. Render reads this file and provisions
+# the service and its disk. On first deploy you'll be prompted to fill in the
+# two secret API keys below (they have sync: false, so they are never stored in
+# git).
+#
+# State lives on the attached persistent disk mounted at /data, so consent
+# records and ghost PNGs survive deploys and restarts — the same per-session
+# directory layout the local backend uses, just on a durable disk.
+
 services:
-  # Flask API Server
   - type: web
-    name: expertavatar-api
-    env: python
-    region: oregon
-    plan: free  # or starter ($7/month)
-    buildCommand: pip install -r requirements.txt
-    # Bind to 0.0.0.0:$PORT (Render provides PORT automatically, usually 10000)
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
-    envVars:
-      # Core required keys
-      - key: SUPABASE_URL
-        sync: false  # Set in Render dashboard
-      - key: SUPABASE_SERVICE_KEY
-        sync: false  # Set in Render dashboard
-      - key: ANTHROPIC_API_KEY
-        sync: false  # Set in Render dashboard
-      - key: CARTESIA_API_KEY
-        sync: false  # Set in Render dashboard
-      - key: GOOGLE_API_KEY
-        sync: false  # Required for cartoon/illustration generation via Gemini
-      - key: BACKEND_API_KEY
-        sync: false  # Set in Render dashboard - shared secret for agent authentication
-      # Payment features (Stripe)
-      - key: STRIPE_SECRET_KEY
-        sync: false  
-      - key: STRIPE_PRICE_ID
-        sync: false  
-      - key: STRIPE_WEBHOOK_SECRET
-        sync: false  
-      # Email notifications (Resend) 
-      - key: RESEND_API_KEY
-        sync: false 
-      - key: RESEND_FROM_EMAIL
-        sync: false  # defaults to "Expert Avatar <hello@notifications.melochora.com>"
-      - key: SUPPORT_EMAIL
-        sync: false  # defaults to "support@melochora.com"
-      # App configuration
-      - key: APP_URL
-        sync: false  # Your app domain - defaults to "https://expertavatar.com"
-      # Voice provider config - Optional
-      - key: VOICE_PROVIDER
-        value: inworld  # or "cartesia"
-      - key: INWORLD_API_KEY
-        sync: false  
-      - key: INWORLD_WORKSPACE_ID
-        sync: false  
+    name: imdead-backend
+    runtime: python
+    plan: starter            # a disk requires a paid instance; free can't mount one
+    region: oregon           # change to your nearest region if you like
+    # uv provisions Python 3.13 (per pyproject) and installs from the frozen lock.
+    buildCommand: pip install uv && uv sync --frozen
+    # gunicorn in place of Flask's dev server. One worker: the clone/ghost work is
+    # slow and synchronous, and the disk pins us to a single instance anyway.
+    # 120s timeout so a long ghost/clone request doesn't trip the worker timeout.
+    startCommand: uv run gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
     healthCheckPath: /health
-
-  # Background Worker for Processing Jobs
-  - type: worker
-    name: expertavatar-worker
-    env: python
-    region: oregon
-    plan: free  # or starter ($7/month)
-    buildCommand: pip install -r requirements.txt
-    startCommand: python worker.py
+    disk:
+      name: imdead-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
-      # Core required keys
-      - key: SUPABASE_URL
-        sync: false  # Set in Render dashboard
-      - key: SUPABASE_SERVICE_KEY
-        sync: false  # Set in Render dashboard
-      - key: ANTHROPIC_API_KEY
-        sync: false  # Set in Render dashboard
-      - key: WAVESPEED_API_KEY
-        sync: false  # Set in Render dashboard - InfiniteTalk hot-take video generation
-      - key: CARTESIA_API_KEY
-        sync: false  # Set in Render dashboard
+      # Per-session storage root -> the mounted disk (storage.py reads DATA_DIR).
+      - key: DATA_DIR
+        value: /data
+      # Secrets: set these in the Render dashboard on first deploy.
+      - key: ASSEMBLYAI_API_KEY
+        sync: false
       - key: GOOGLE_API_KEY
-        sync: false  # Required for cartoon/illustration generation via Gemini
-      # Payment features (Stripe) - Optional
-      - key: STRIPE_SECRET_KEY
-        sync: false  
-      - key: STRIPE_PRICE_ID
-        sync: false  
-      # Email notifications (Resend) 
-      - key: RESEND_API_KEY
-        sync: false  
-      - key: RESEND_FROM_EMAIL
-        sync: false  # defaults to "Expert Avatar <hello@notifications.melochora.com>"
-      - key: SUPPORT_EMAIL
-        sync: false  # defaults to "support@melochora.com"
-      # App configuration
-      - key: APP_URL
-        sync: false  # Your app domain - defaults to "https://expertavatar.com"
-      # Voice provider config - Optional
-      - key: VOICE_PROVIDER
-        value: inworld  # or "cartesia"
-      - key: INWORLD_API_KEY
-        sync: false  # Optional - if using Inworld for voice
-      - key: INWORLD_WORKSPACE_ID
-        sync: false  # Optional - if using Inworld for voice
-      # Worker configuration
-      - key: WORKER_POLL_INTERVAL
-        value: 5  # Poll every 5 seconds
-      - key: STUCK_JOB_TIMEOUT
-        value: 5  # Reset jobs stuck for 5+ minutes (short for fast OOM recovery)
-
-  # Next.js Frontend
-  - type: web
-    name: expertavatar-frontend
-    env: node
-    region: oregon
-    plan: free  # or starter ($7/month)
-    buildCommand: pnpm install && pnpm build
-    startCommand: pnpm start
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: NEXT_PUBLIC_API_URL
-        sync: false  # Set to your backend URL
-      - key: NEXT_PUBLIC_SUPABASE_URL
         sync: false
-      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-        sync: false
-      - key: NEXT_PUBLIC_LIVEKIT_URL
-        sync: false
+      # Optional: uncomment to pin a data-zone TTS host.
+      # - key: ASSEMBLYAI_TTS_HOST
+      #   value: https://tts.us.assemblyai.com

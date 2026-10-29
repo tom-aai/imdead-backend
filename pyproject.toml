@@ -1,23 +1,16 @@
 [project]
-name = "expert-avatar-backend"
+name = "imdead-backend"
 version = "0.1.0"
+description = "I'm Dead — local backend: voice clone (AssemblyAI) + ghost image (Gemini)"
 requires-python = ">=3.13"
 dependencies = [
-    "anthropic>=0.72.0",
     "flask==3.0.3",
+    "flask-cors>=4.0.0",
     "python-dotenv==1.0.1",
     "requests==2.32.3",
-    "supabase>=2.23.3",
-    "torch>=2.0.0",
-    "torchaudio>=2.0.0",
     "pydub>=0.25.1",
-    "numpy>=1.24.0",
     "audioop-lts>=0.2.1",
-    "cartesia>=1.0.0",
-    "moviepy>=1.0.3",
-    "ffmpeg-python>=0.2.0",
     "google-genai>=1.56.0",
-    "pillow==10.4.0",
-    "resend>=2.19.0",
-    "stripe>=11.0.0",
+    "pillow>=11.0.0",
+    "gunicorn>=26.2.0",
 ]

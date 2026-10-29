@@ -1,9 +1,0 @@
-there are a few issues with my app I'd like you to fix.
-
-1. when a user talks to the chat agent, the user who created the expert avatar sees a card appear on their frontend dashboard, saying a new avatar is getting generated. Eventually, the card shows that there wasn't enough data for an avatar to get generated. The user has to delete the card this shouldn't happen. We shouldn't be creating new avatars based on a user talking to a chat agent. 
-
-2. I want the default for the chat agent to be the photorealistic asset, not the cartoon version of the person. The default when the user finishes creating a new avatar session with a new avatar should be to show on the dashboard the photo. The photo itself, not the cartoon, and when a user starts a new chat session, it should be with the photo-based avatar, not the cartoon avatar. 
-
-3. 
-
-
